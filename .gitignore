@@ -1,0 +1,7 @@
+.env
+.venv/
+logs/
+servidor/.node
+dados/
+__pycache__/
+*.pyc
