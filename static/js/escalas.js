@@ -53,6 +53,24 @@ const Escalas = (() => {
     if (abrirNova) assistente(escalas);
   }
 
+  const semAcento = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+  /**
+   * Palpite de turno para um dia (j: 0 = seg ... 6 = dom) pelo nome dos modelos.
+   * Prefere os turnos com o nome da loja (ex.: "Parque Dez · Sexta"); se a loja tem turnos
+   * mas nenhum para esse dia, devolve '' (folga). Sem turnos da loja, ignora os de outras lojas.
+   */
+  function palpiteTurno(loja, j) {
+    const ativos = S.turnos.filter((t) => t.ativo);
+    const util = [/semana/i, /seg/i];
+    const padroes = [util, util, util, util, [/sexta/i, ...util], [/s[áa]b/i], [/domingo.*ajust/i, /domingo/i]][j];
+    const acha = (lista) => { for (const re of padroes) { const t = lista.find((x) => re.test(x.nome)); if (t) return t.id; } return ''; };
+    const daLoja = loja ? ativos.filter((t) => semAcento(t.nome).includes(semAcento(loja))) : [];
+    if (daLoja.length) return acha(daLoja);
+    const outrasLojas = [...S.lojas().map(semAcento), 'parque dez'].filter((l) => l !== semAcento(loja));
+    return acha(ativos.filter((t) => !outrasLojas.some((l) => semAcento(t.nome).includes(l))));
+  }
+
   // ========================================================== ASSISTENTE
   function assistente(escalas) {
     const lojas = S.lojas();
@@ -64,30 +82,61 @@ const Escalas = (() => {
       proxSeg = U.dow(dia) === 1 ? dia : U.addDias(U.segunda(dia), 7);
     }
     const st = {
-      passo: 1, loja: lojas[0] || '', inicio: proxSeg, semanas: 2, titulo: '', tituloManual: false,
+      passo: 1, loja: lojas[0] || '', inicio: proxSeg, semanas: 2, titulo: '', tituloManual: false, busca: '',
       fids: new Set(), modo: 'gerar', freq: 'auto', diasFolga: [0, 1, 2, 3, 4], membros: [], origem: escalas[0]?.id || '', contexto: {},
     };
     S.funcionarios.filter((f) => f.ativo && (!st.loja || f.loja === st.loja)).forEach((f) => st.fids.add(f.id));
 
-    const m = UI.modal({ titulo: 'Nova escala', sub: 'Defina o período, quem participa e como preencher.', largo: true, corpo: '<div data-conteudo></div>', rodape: '<div data-rodape class="row" style="width:100%"></div>' });
+    const m = UI.modal({ titulo: 'Nova escala', sub: 'Defina o período, quem participa e como preencher.', largo: 'extra', corpo: '<div data-conteudo></div>', rodape: '<div data-rodape class="row" style="width:100%"></div>' });
+    const DIAS_SEMANA = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+    const dowDoIndice = (j) => (j + 1) % 7; // 0 = segunda ... 6 = domingo  →  Date.getDay()
     const fim = () => U.addDias(st.inicio, st.semanas * 7 - 1);
     const tituloPadrao = () => `Escala ${st.loja ? st.loja + ' ' : ''}— ${U.ddmm(st.inicio)} a ${U.ddmm(fim())}`;
 
-    const sugerirTurno = (fid, filtro, nomeRe) => {
-      const ctx = st.contexto[fid] || {};
+    /**
+     * Turno sugerido para o dia j (0 = seg ... 6 = dom):
+     * 1) o que a pessoa mais usou nesse dia da semana nas escalas anteriores;
+     * 2) um turno com o nome da loja dela (ex.: "Parque Dez · Sexta"); sem turno da loja para o dia, folga;
+     * 3) um palpite pelo nome do turno.
+     */
+    const sugerirTurno = (f, j) => {
+      const dow = dowDoIndice(j);
+      const ctx = st.contexto[f.id] || {};
       const cont = {};
-      Object.entries(ctx).forEach(([d, it]) => { if (CLT.ehTrabalho(it) && it.turno_id && filtro(U.dow(d))) cont[it.turno_id] = (cont[it.turno_id] || 0) + 1; });
+      Object.entries(ctx).forEach(([d, it]) => { if (CLT.ehTrabalho(it) && it.turno_id && U.dow(d) === dow) cont[it.turno_id] = (cont[it.turno_id] || 0) + 1; });
       const top = Object.entries(cont).sort((a, b) => b[1] - a[1])[0];
       if (top && S.turno(top[0])?.ativo) return Number(top[0]);
-      const ativos = S.turnos.filter((t) => t.ativo);
-      return (ativos.find((t) => nomeRe.test(t.nome)) || ativos[0] || {}).id || '';
+      return palpiteTurno(f.loja, j);
+    };
+
+    // Texto usado na busca de funcionários (nome, cargo, loja e matrícula, sem acento)
+    const textoBusca = (f) => semAcento([f.nome, f.cargo, f.loja, f.matricula].join(' '));
+    const filtrarLista = () => {
+      const q = semAcento(st.busca).trim();
+      let visiveis = 0;
+      m.$$('.lista-sel label[data-busca]').forEach((l) => {
+        const ok = !q || q.split(/\s+/).every((p) => l.dataset.busca.includes(p));
+        l.hidden = !ok;
+        if (ok) visiveis++;
+      });
+      m.$$('.lista-sel [data-grupo]').forEach((g) => {
+        g.hidden = !m.$$(`.lista-sel label[data-grupo-de="${g.dataset.grupo}"]`).some((l) => !l.hidden);
+      });
+      const vazio = m.$('[data-nenhum-achado]');
+      if (vazio) vazio.hidden = visiveis > 0;
+    };
+    const atualizarContagem = () => {
+      const c = m.$('[data-contagem]');
+      if (c) c.textContent = `Funcionários (${st.fids.size} selecionados)`;
+      const b = m.$('[data-avancar]');
+      if (b) b.disabled = !st.fids.size;
     };
 
     function passo1() {
       const funcs = S.funcionarios.filter((f) => f.ativo);
       const porLoja = funcs.filter((f) => !st.loja || f.loja === st.loja);
       const outros = funcs.filter((f) => st.loja && f.loja !== st.loja);
-      const item = (f) => `<label><input type="checkbox" data-fid="${f.id}" ${st.fids.has(f.id) ? 'checked' : ''} style="accent-color:var(--brand)">
+      const item = (f, grupo) => `<label data-busca="${esc(textoBusca(f))}" data-grupo-de="${grupo}"><input type="checkbox" data-fid="${f.id}" ${st.fids.has(f.id) ? 'checked' : ''} style="accent-color:var(--brand)">
         <div class="avatar">${U.iniciais(f.nome)}</div><div><div class="pessoa-nome">${esc(f.nome)}</div><div class="pessoa-sub">${esc([f.cargo, f.loja].filter(Boolean).join(' · '))}</div></div>
         <span class="spacer"></span><span class="muted small num">${U.dur(f.jornada_semanal * 60)}/sem.</span></label>`;
       return `<div class="passos"><div class="passo feito"></div><div class="passo"></div></div>
@@ -97,21 +146,22 @@ const Escalas = (() => {
             <label class="campo"><span>Loja / setor</span><input class="inp" data-v="loja" list="dl-lojas2" value="${esc(st.loja)}">
               <datalist id="dl-lojas2">${lojas.map((l) => `<option value="${esc(l)}">`).join('')}</datalist></label>
             <div class="form-grade" style="gap:12px">
-              <label class="campo"><span>Início</span><input class="inp" type="date" data-v="inicio" value="${st.inicio}"></label>
+              <label class="campo"><span>Início</span>${UI.campoData(st.inicio, 'data-v="inicio"')}</label>
               <label class="campo"><span>Duração</span><select class="inp" data-v="semanas">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<option value="${n}" ${n === st.semanas ? 'selected' : ''}>${n} ${n === 1 ? 'semana' : 'semanas'}</option>`).join('')}</select></label>
             </div>
           </div>
           <div class="aviso info">${ic('calendario')}<div>Período: <b>${U.DOW_LONGO[U.dow(st.inicio)]}, ${U.dataBR(st.inicio)}</b> a <b>${U.DOW_LONGO[U.dow(fim())]}, ${U.dataBR(fim())}</b>${U.dow(st.inicio) !== 1 ? '. Para gerar automaticamente, o início precisa ser numa segunda-feira.' : '.'}</div></div>
-          <div class="campo"><div class="row"><span style="font-size:12.5px;font-weight:500">Funcionários (${st.fids.size} selecionados)</span><span class="spacer"></span>
-            <button type="button" class="btn fantasma pequeno" data-marcar>Marcar da loja</button><button type="button" class="btn fantasma pequeno" data-nenhum>Limpar</button></div>
-            <div class="lista-sel">${porLoja.map(item).join('')}${outros.length ? `<div class="muted small" style="padding:8px 12px;background:var(--surface-2)">Outras lojas</div>${outros.map(item).join('')}` : ''}
-              ${funcs.length ? '' : '<div class="vazio">Nenhum funcionário ativo. Cadastre antes de criar a escala.</div>'}</div></div>
+          <div class="campo"><div class="row wrap"><span style="font-size:12.5px;font-weight:500" data-contagem>Funcionários (${st.fids.size} selecionados)</span><span class="spacer"></span>
+            <button type="button" class="btn fantasma pequeno" data-marcar>Marcar os visíveis</button><button type="button" class="btn fantasma pequeno" data-nenhum>Desmarcar todos</button></div>
+            <div class="busca" style="margin:2px 0 4px">${ic('busca')}<input class="inp" data-buscar placeholder="Pesquisar por nome, cargo, loja ou matrícula" value="${esc(st.busca)}" style="width:100%"></div>
+            <div class="lista-sel">${porLoja.map((f) => item(f, 'loja')).join('')}${outros.length ? `<div class="muted small" data-grupo="outras" style="padding:8px 12px;background:var(--surface-2)">Outras lojas</div>${outros.map((f) => item(f, 'outras')).join('')}` : ''}
+              ${funcs.length ? '<div class="vazio" data-nenhum-achado hidden>Ninguém encontrado com essa pesquisa.</div>' : '<div class="vazio">Nenhum funcionário ativo. Cadastre antes de criar a escala.</div>'}</div></div>
         </div>`;
     }
 
     function passo2() {
       const ativos = S.turnos.filter((t) => t.ativo);
-      const opcoes = (sel, vazio) => `<option value="">${vazio}</option>${ativos.map((t) => `<option value="${t.id}" ${Number(sel) === t.id ? 'selected' : ''}>${esc(t.nome)}</option>`).join('')}`;
+      const opcoesTurno = (sel) => ativos.map((t) => `<option value="${t.id}" ${Number(sel) === t.id ? 'selected' : ''}>${UI.faixa(t.blocos)} · ${esc(t.nome)}</option>`).join('');
       const modos = [
         ['gerar', 'gerar', 'Gerar automaticamente', 'Distribui folgas e domingos seguindo a CLT.'],
         ['copiar', 'copiar', 'Repetir outra escala', 'Copia o padrão semana a semana de uma escala existente.'],
@@ -119,26 +169,48 @@ const Escalas = (() => {
       ];
       let corpo = '';
       if (st.modo === 'gerar') {
-        const avisos = avisosDescanso();
+        const perfis = st.membros.map((mb) => CLT.perfilMembro(mb));
+        const algumDomingo = perfis.some((p) => p.trabalhaDomingo);
+        const rotativos = st.membros.filter((mb, i) => perfis[i].precisaRotativa);
+        const horasSemana = (mb) => mb.t.reduce((s, id) => s + (S.turno(id) ? U.resumoBlocos(S.turno(id).blocos).trabalhado : 0), 0);
+        const resumoLinha = (mb, p) => {
+          const h = horasSemana(mb);
+          const contrato = Number(mb.f.jornada_semanal || 44) * 60;
+          const tipo = p.precisaRotativa ? '6x1 · folga rotativa' : `${7 - p.fixas.length}x${p.fixas.length}`;
+          // Folga rotativa: desconta um dia em que a folga pode cair (semana típica, sem o domingo de folga)
+          const minDia = (j) => U.resumoBlocos(S.turno(mb.t[j]).blocos).trabalhado;
+          const total = p.precisaRotativa ? h - Math.min(...(st.diasFolga.length ? st.diasFolga : [0]).map(minDia)) : h;
+          return `<span class="num" style="font-weight:600;color:${total > contrato ? 'var(--erro)' : 'inherit'}">${U.dur(total)}</span>
+            <div class="pessoa-sub">${tipo}</div>`;
+        };
         corpo = `
-          <table class="tabela tabela-membros" style="border:1px solid var(--line);border-radius:10px;overflow:hidden">
-            <thead><tr><th>Funcionário</th><th>Seg a sex</th><th>Sábado</th><th>Domingo</th></tr></thead>
+          <div class="aviso info">${ic('info')}<div>Escolha o turno de cada dia. <b>“Folga”</b> deixa o dia livre toda semana, como sábado e domingo no administrativo (5x2).
+            Quem tem turno nos 7 dias recebe uma folga rotativa por semana, distribuída pelo sistema.</div></div>
+          <div style="overflow-x:auto;border:1px solid var(--line);border-radius:10px">
+          <table class="tabela tabela-membros">
+            <thead><tr><th>Funcionário</th>${DIAS_SEMANA.map((d) => `<th>${d}</th>`).join('')}<th class="right">Semana</th></tr></thead>
             <tbody>
               <tr style="background:var(--surface-2)"><td class="muted small">Aplicar a todos</td>
-                ${['tSemana', 'tSab', 'tDom'].map((k) => `<td><select class="inp" data-todos="${k}">${opcoes('', '—')}</select></td>`).join('')}</tr>
-              ${st.membros.map((mb, i) => `<tr><td><div class="pessoa"><div class="avatar">${U.iniciais(mb.f.nome)}</div><div><div class="pessoa-nome">${esc(mb.f.nome)}</div><div class="pessoa-sub">${esc(mb.f.cargo || '')}</div></div></div></td>
-                ${['tSemana', 'tSab', 'tDom'].map((k) => `<td><select class="inp" data-m="${i}" data-k="${k}">${opcoes(mb[k], 'Não trabalha')}</select></td>`).join('')}</tr>`).join('')}
-            </tbody></table>
-          <div class="form-grade">
-            <div class="campo"><span>Domingo de folga</span><div class="segmentado" data-freq>
-              ${[['auto', 'Automático'], ['2', 'A cada 2 sem.'], ['3', 'A cada 3 sem.']].map(([k, n]) => `<button type="button" data-k="${k}" class="${st.freq === k ? 'ativo' : ''}">${n}</button>`).join('')}</div>
-              <small>Automático: mulheres a cada 2 semanas (CLT art. 386) e homens a cada 3 (Lei 10.101/2000).</small></div>
-            <div class="campo"><span>A folga semanal pode cair em</span><div class="row wrap" data-dias>
-              ${['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((n, i) => `<label class="chk"><input type="checkbox" value="${i}" ${st.diasFolga.includes(i) ? 'checked' : ''}>${n}</label>`).join('')}</div>
-              <small>O sistema espalha as folgas para manter gente no caixa todo dia.</small></div>
+                ${DIAS_SEMANA.map((_, j) => `<td><select class="inp" data-todos="${j}" title="Aplicar a todos na ${DIAS_SEMANA[j]}"><option value="">—</option><option value="0">Folga</option>${opcoesTurno()}</select></td>`).join('')}
+                <td></td></tr>
+              ${st.membros.map((mb, i) => `<tr><td><div class="pessoa"><div class="avatar">${U.iniciais(mb.f.nome)}</div><div><div class="pessoa-nome">${esc(mb.f.nome)}</div><div class="pessoa-sub">${esc(mb.f.cargo || '')} · ${U.dur(mb.f.jornada_semanal * 60)}</div></div></div></td>
+                ${mb.t.map((tid, j) => `<td><select class="inp" data-m="${i}" data-j="${j}" style="${tid ? `border-left:3px solid ${S.turno(tid)?.cor}` : ''}"><option value="">Folga</option>${opcoesTurno(tid)}</select></td>`).join('')}
+                <td class="right">${resumoLinha(mb, perfis[i])}</td></tr>`).join('')}
+            </tbody></table></div>
+          <div class="row wrap" style="gap:8px">
+            <span class="muted small">Atalhos:</span>
+            <button type="button" class="btn pequeno" data-copiar-seg>Copiar segunda para ter a sex</button>
           </div>
-          <div class="aviso info">${ic('info')}<div>Na semana do domingo de folga a pessoa também folga num dia útil, porque a CLT não permite 7 dias seguidos de trabalho. Essas semanas ficam com menos horas.</div></div>
-          ${avisos}`;
+          ${algumDomingo || rotativos.length ? `<div class="form-grade">
+            ${algumDomingo ? `<div class="campo"><span>Domingo de folga (para quem trabalha domingo)</span><div class="segmentado" data-freq>
+              ${[['auto', 'Automático'], ['2', 'A cada 2 sem.'], ['3', 'A cada 3 sem.']].map(([k, n]) => `<button type="button" data-k="${k}" class="${st.freq === k ? 'ativo' : ''}">${n}</button>`).join('')}</div>
+              <small>Automático: mulheres a cada 2 semanas (CLT art. 386) e homens a cada 3 (Lei 10.101/2000).</small></div>` : ''}
+            ${rotativos.length ? `<div class="campo"><span>Folga rotativa pode cair em</span><div class="row wrap" data-dias>
+              ${['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((n, i) => `<label class="chk"><input type="checkbox" value="${i}" ${st.diasFolga.includes(i) ? 'checked' : ''}>${n}</label>`).join('')}</div>
+              <small>Vale só para ${rotativos.map((mb) => esc(mb.f.nome)).join(', ')}, que ${rotativos.length === 1 ? 'tem' : 'têm'} turno nos 7 dias. O sistema espalha as folgas para não faltar gente.</small></div>` : ''}
+          </div>` : ''}
+          ${rotativos.some((mb) => CLT.perfilMembro(mb).trabalhaDomingo) ? `<div class="aviso info">${ic('info')}<div>Na semana do domingo de folga, quem tem folga rotativa também folga num dia útil (a CLT não permite 7 dias seguidos). Essas semanas ficam com menos horas.</div></div>` : ''}
+          ${avisosDescanso()}`;
       } else if (st.modo === 'copiar') {
         corpo = escalas.length ? `<label class="campo"><span>Escala de origem</span><select class="inp" data-origem>${escalas.map((e) => `<option value="${e.id}" ${Number(st.origem) === e.id ? 'selected' : ''}>${esc(e.titulo)} · ${U.periodo(e.inicio, e.fim)}</option>`).join('')}</select>
           <small>Cada semana da nova escala recebe a semana correspondente da origem, repetindo o ciclo. Funcionários que não estão na origem ficam em branco.</small></label>`
@@ -155,11 +227,12 @@ const Escalas = (() => {
 
     function avisosDescanso() {
       const grupos = {};
-      const pares = [['tSemana', 'tSemana', 'Dia útil → dia útil'], ['tSemana', 'tSab', 'Sexta → sábado'], ['tSab', 'tDom', 'Sábado → domingo'], ['tDom', 'tSemana', 'Domingo → segunda']];
-      st.membros.forEach((mb) => pares.forEach(([a, b, rot]) => {
-        const ta = S.turno(mb[a]), tb = S.turno(mb[b]);
+      const LONGO = ['segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado', 'domingo'];
+      st.membros.forEach((mb) => [0, 1, 2, 3, 4, 5, 6].forEach((j) => {
+        const ta = S.turno(mb.t[j]), tb = S.turno(mb.t[(j + 1) % 7]);
         if (!ta || !tb) return;
         const gap = CLT.descansoEntre(ta.blocos, tb.blocos);
+        const rot = `${LONGO[j][0].toUpperCase() + LONGO[j].slice(1)} → ${LONGO[(j + 1) % 7]}`;
         if (gap != null && gap < 660) (grupos[`${rot}|${gap}`] ||= []).push(mb.f.nome);
       }));
       return Object.entries(grupos).map(([k, nomes]) => {
@@ -170,6 +243,7 @@ const Escalas = (() => {
 
     function desenhar() {
       m.$('[data-conteudo]').innerHTML = st.passo === 1 ? passo1() : passo2();
+      if (st.passo === 1) filtrarLista();
       m.$('[data-rodape]').innerHTML = st.passo === 1
         ? `<span class="spacer"></span><button class="btn" data-fechar>Cancelar</button><button class="btn primario" data-avancar ${st.fids.size ? '' : 'disabled'}>Continuar ${ic('seta')}</button>`
         : `<button class="btn" data-voltar>${ic('voltar')} Voltar</button><span class="spacer"></span><button class="btn primario" data-criar>${ic(st.modo === 'gerar' ? 'gerar' : 'check')} ${st.modo === 'gerar' ? 'Gerar escala' : 'Criar escala'}</button>`;
@@ -177,20 +251,42 @@ const Escalas = (() => {
     }
 
     m.el.addEventListener('input', (e) => {
+      if (e.target.matches('[data-buscar]')) { st.busca = e.target.value; filtrarLista(); return; }
       const v = e.target.dataset.v;
       if (!v) return;
       if (v === 'titulo') { st.titulo = e.target.value; st.tituloManual = true; return; }
       if (v === 'loja') st.loja = e.target.value;
     });
+    m.el.addEventListener('keydown', (e) => {
+      // Enter na pesquisa marca o único resultado visível
+      if (e.key !== 'Enter' || !e.target.matches('[data-buscar]')) return;
+      e.preventDefault();
+      const vis = m.$$('.lista-sel label[data-busca]').filter((l) => !l.hidden);
+      if (vis.length === 1) { const cb = vis[0].querySelector('input'); cb.checked = true; st.fids.add(Number(cb.dataset.fid)); atualizarContagem(); }
+    });
+    // Redesenha mantendo o foco no mesmo campo (ex.: depois de trocar a data de início)
+    const redesenhar = () => {
+      const ativo = document.activeElement;
+      const seletor = ativo && ativo.dataset && ativo.dataset.v ? `[data-v="${ativo.dataset.v}"]` : null;
+      desenhar();
+      filtrarLista();
+      if (seletor) m.$(seletor)?.focus();
+    };
     m.el.addEventListener('change', (e) => {
       const t = e.target;
-      if (t.dataset.v === 'inicio' && t.value) { st.inicio = t.value; refazTitulo(); desenhar(); }
-      else if (t.dataset.v === 'semanas') { st.semanas = Number(t.value); refazTitulo(); desenhar(); }
-      else if (t.dataset.v === 'loja') { refazTitulo(); desenhar(); }
-      else if (t.dataset.fid) { t.checked ? st.fids.add(Number(t.dataset.fid)) : st.fids.delete(Number(t.dataset.fid)); desenhar(); }
-      else if (t.dataset.m) { st.membros[Number(t.dataset.m)][t.dataset.k] = t.value; desenhar(); }
-      else if (t.dataset.todos) { if (t.value) st.membros.forEach((mb) => { mb[t.dataset.todos] = t.value; }); desenhar(); }
-      else if (t.closest('[data-dias]')) { st.diasFolga = [...m.el.querySelectorAll('[data-dias] input:checked')].map((x) => Number(x.value)); }
+      if (t.dataset.v === 'inicio') {
+        const iso = U.lerData(t.value);
+        if (!iso) { UI.toast('Data de início inválida. Use dd/mm/aaaa ou só os números (16112026).', 'erro'); return; }
+        st.inicio = iso; refazTitulo(); redesenhar();
+      } else if (t.dataset.v === 'semanas') { st.semanas = Number(t.value); refazTitulo(); redesenhar(); }
+      else if (t.dataset.v === 'loja') { refazTitulo(); redesenhar(); }
+      else if (t.dataset.fid) { t.checked ? st.fids.add(Number(t.dataset.fid)) : st.fids.delete(Number(t.dataset.fid)); atualizarContagem(); }
+      else if (t.dataset.m) { st.membros[Number(t.dataset.m)].t[Number(t.dataset.j)] = t.value ? Number(t.value) : ''; desenhar(); }
+      else if (t.dataset.todos !== undefined && t.matches('select')) {
+        if (t.value !== '') st.membros.forEach((mb) => { mb.t[Number(t.dataset.todos)] = t.value === '0' ? '' : Number(t.value); });
+        desenhar();
+      }
+      else if (t.closest('[data-dias]')) { st.diasFolga = [...m.el.querySelectorAll('[data-dias] input:checked')].map((x) => Number(x.value)); desenhar(); }
       else if (t.dataset.origem !== undefined) st.origem = t.value;
     });
     const refazTitulo = () => { if (!st.tituloManual) st.titulo = ''; };
@@ -198,15 +294,26 @@ const Escalas = (() => {
     m.el.addEventListener('click', async (e) => {
       const t = e.target;
       if (t.closest('[data-marcar]')) {
-        S.funcionarios.filter((f) => f.ativo && (!st.loja || f.loja === st.loja)).forEach((f) => st.fids.add(f.id)); desenhar(); return;
+        m.$$('.lista-sel label[data-busca]').filter((l) => !l.hidden).forEach((l) => {
+          const cb = l.querySelector('input'); cb.checked = true; st.fids.add(Number(cb.dataset.fid));
+        });
+        atualizarContagem(); return;
       }
-      if (t.closest('[data-nenhum]')) { st.fids.clear(); desenhar(); return; }
+      if (t.closest('[data-nenhum]')) { st.fids.clear(); m.$$('.lista-sel input[data-fid]').forEach((cb) => { cb.checked = false; }); atualizarContagem(); return; }
+      if (t.closest('[data-copiar-seg]')) { st.membros.forEach((mb) => { for (let j = 1; j <= 4; j++) mb.t[j] = mb.t[0]; }); desenhar(); return; }
       const modo = t.closest('[data-modo]');
       if (modo) { st.modo = modo.dataset.modo; desenhar(); return; }
       const fq = t.closest('[data-freq] button');
       if (fq) { st.freq = fq.dataset.k; desenhar(); return; }
       if (t.closest('[data-voltar]')) { st.passo = 1; desenhar(); return; }
       if (t.closest('[data-avancar]')) {
+        // Todos da mesma loja: a escala assume essa loja (e o título, se não foi editado)
+        const lojasSel = [...new Set([...st.fids].map((id) => S.func(id)?.loja).filter(Boolean))];
+        if (lojasSel.length === 1 && lojasSel[0] !== st.loja) {
+          st.loja = lojasSel[0];
+          refazTitulo();
+          UI.toast(`Loja da escala ajustada para ${st.loja}.`);
+        }
         if (!st.titulo) st.titulo = tituloPadrao();
         try {
           const ids = [...st.fids];
@@ -214,9 +321,8 @@ const Escalas = (() => {
           st.contexto = r.contexto;
           st.membros = ids.map((id) => S.func(id)).sort((a, b) => a.nome.localeCompare(b.nome)).map((f) => ({
             f,
-            tSemana: sugerirTurno(f.id, (d) => d >= 1 && d <= 5, /semana|seg/i),
-            tSab: sugerirTurno(f.id, (d) => d === 6, /s[áa]b/i),
-            tDom: sugerirTurno(f.id, (d) => d === 0, /domingo.*ajust|domingo/i),
+            // Um turno por dia (seg..dom): o que a pessoa mais usou nesse dia da semana; senão, um palpite pelo nome
+            t: [0, 1, 2, 3, 4, 5, 6].map((j) => sugerirTurno(f, j)),
           }));
           st.passo = 2; desenhar();
         } catch (err) { UI.toast(err.message, 'erro'); }
@@ -235,7 +341,9 @@ const Escalas = (() => {
       const fids = st.passo === 2 && st.membros.length ? st.membros.map((mb) => mb.f.id) : [...st.fids];
       let itens = {};
       if (st.modo === 'gerar') {
-        if (!st.diasFolga.length) { UI.toast('Escolha ao menos um dia para a folga semanal.', 'erro'); return; }
+        if (st.membros.some((mb) => CLT.perfilMembro(mb).precisaRotativa) && !st.diasFolga.length) {
+          UI.toast('Escolha ao menos um dia para a folga rotativa.', 'erro'); return;
+        }
         itens = CLT.gerar({ inicio, semanas: st.semanas, membros: st.membros, freq: st.freq, diasFolga: st.diasFolga, contexto: st.contexto, config: S.config });
       } else if (st.modo === 'copiar' && st.origem) {
         const o = await API.get(`/api/escalas/${st.origem}`);
@@ -282,6 +390,7 @@ const Escalas = (() => {
       id: Number(id), main, escala: dados.escala, funcs: dados.funcionarios.filter((f) => S.func(f)), itens,
       contexto: dados.contexto, sobreposicoes: dados.sobreposicoes, sujo: false,
       aba: E && E.id === Number(id) ? E.aba : 'conformidade', filtroSev: 'todos', abertos: new Set(), diaCob: null,
+      sel: new Set(), ancora: null,
     };
     E.diaCob = E.escala.inicio <= S.hoje && E.escala.fim >= S.hoje ? S.hoje : E.escala.inicio;
     montar();
@@ -318,7 +427,7 @@ const Escalas = (() => {
       <div class="card" style="margin-bottom:18px">
         <div class="card-cab nao-imprimir">
           <h2>Grade</h2><span class="muted small" data-dica></span>
-          <div class="acoes" data-acoes-grade></div>
+          <div class="acoes"><div data-barra-sel></div><div data-acoes-grade></div></div>
         </div>
         <div class="grade-wrap"><table class="grade" data-grade></table></div>
         <div class="legenda" data-legenda></div>
@@ -330,7 +439,15 @@ const Escalas = (() => {
       </div>`;
     analisar();
     desenharTudo();
-    E.main.querySelector('[data-grade]').addEventListener('click', cliqueGrade);
+    const grade = E.main.querySelector('[data-grade]');
+    grade.addEventListener('click', cliqueGrade);
+    grade.addEventListener('mousedown', inicioArraste);
+    grade.addEventListener('mouseover', moverArraste);
+    E.main.querySelector('[data-barra-sel]').addEventListener('click', (ev) => {
+      if (ev.target.closest('[data-limpar-sel]')) { UI.fecharPopover(); limparSelecao(); return; }
+      const b = ev.target.closest('[data-editar-sel]');
+      if (b && E.sel.size) editarDias(b, [...E.sel]);
+    });
     E.main.querySelector('[data-abas]').addEventListener('click', (ev) => {
       const b = ev.target.closest('[data-aba-k]'); if (!b) return;
       E.aba = b.dataset.abaK; desenharAbas();
@@ -453,7 +570,9 @@ const Escalas = (() => {
     grade.innerHTML = funcs.length ? head + `<tbody>${body}</tbody>` + foot
       : `<tbody><tr><td><div class="vazio">${ic('pessoas')}<div>Nenhum funcionário nesta escala.</div></div></td></tr></tbody>`;
 
-    E.main.querySelector('[data-dica]').textContent = bloqueada() ? 'Escala publicada: reabra para editar.' : 'Clique em um dia para definir turno, folga ou afastamento.';
+    E.main.querySelector('[data-dica]').innerHTML = bloqueada() ? 'Escala publicada: reabra para editar.'
+      : 'Clique num dia para editar. Para vários: arraste, <kbd>Shift</kbd>+clique ou <kbd>Ctrl</kbd>+clique. <kbd>Delete</kbd> limpa.';
+    marcarSelecao();
     E.main.querySelector('[data-acoes-grade]').innerHTML = bloqueada() ? '' : `<button class="btn pequeno" data-add-func>${ic('mais')} Funcionário</button>`;
     E.main.querySelector('[data-add-func]')?.addEventListener('click', adicionarFuncionario);
 
@@ -467,64 +586,161 @@ const Escalas = (() => {
       + `<span class="nao-imprimir">${ic('info')} Totais por semana de seg a dom; * semana incompleta</span>`;
   }
 
-  function cliqueGrade(ev) {
+  // ------------------------------------------------- seleção de vários dias
+  // Clique: edita o dia. Arrastar, Shift+clique (intervalo) ou Ctrl+clique (um a um): seleciona vários.
+  let arraste = null;
+
+  const chaveTd = (td) => `${td.dataset.f}|${td.dataset.d}`;
+  const tdDaChave = (k) => { const [f, d] = k.split('|'); return E.main.querySelector(`td.cel[data-f="${f}"][data-d="${d}"]`); };
+
+  /** Todas as células do retângulo entre duas chaves (linhas = funcionários, colunas = dias). */
+  function retangulo(a, b) {
+    const [fa, da] = a.split('|'), [fb, db] = b.split('|');
+    const ids = E.funcs.map(String), ds = dias();
+    const [l1, l2] = [ids.indexOf(fa), ids.indexOf(fb)].sort((x, y) => x - y);
+    const [c1, c2] = [ds.indexOf(da), ds.indexOf(db)].sort((x, y) => x - y);
+    const r = new Set();
+    for (let l = l1; l <= l2; l++) for (let c = c1; c <= c2; c++) r.add(`${ids[l]}|${ds[c]}`);
+    return r;
+  }
+
+  function marcarSelecao() {
+    E.main.querySelectorAll('td.cel.sel').forEach((x) => x.classList.remove('sel'));
+    E.sel.forEach((k) => tdDaChave(k)?.classList.add('sel'));
+    const barra = E.main.querySelector('[data-barra-sel]');
+    if (!barra) return;
+    if (E.sel.size > 1) {
+      barra.innerHTML = `<div class="barra-sel"><span>${E.sel.size} dias selecionados</span>
+        <button class="btn pequeno primario" data-editar-sel>${ic('editar')} Definir</button>
+        <button class="btn pequeno fantasma" data-limpar-sel title="Desfazer seleção (Esc)">${ic('x')}</button></div>`;
+    } else barra.innerHTML = '';
+  }
+
+  function limparSelecao() { E.sel = new Set(); E.ancora = null; marcarSelecao(); }
+
+  function inicioArraste(ev) {
     const linha = ev.target.closest('[data-linha]');
-    if (linha) { menuLinha(linha, Number(linha.dataset.linha)); return; }
+    if (linha) return;
     const td = ev.target.closest('td.cel');
-    if (!td) return;
+    if (!td || ev.button !== 0) return;
     if (bloqueada()) {
-      const oc = E.analise.celulas[`${td.dataset.f}|${td.dataset.d}`];
+      const oc = E.analise.celulas[chaveTd(td)];
       if (oc) UI.toast(oc.map((o) => o.msg).join(' '), oc.some((o) => o.sev === 'erro') ? 'erro' : 'ok');
       return;
     }
-    editarCelula(td, Number(td.dataset.f), td.dataset.d);
+    ev.preventDefault();
+    UI.fecharPopover();
+    const k = chaveTd(td);
+    if (ev.ctrlKey || ev.metaKey) {
+      E.sel.has(k) ? E.sel.delete(k) : E.sel.add(k);
+      E.ancora = k;
+      marcarSelecao();
+      return;
+    }
+    if (ev.shiftKey && E.ancora) { E.sel = retangulo(E.ancora, k); marcarSelecao(); return; }
+    E.ancora = k;
+    E.sel = new Set([k]);
+    arraste = { inicio: k, moveu: false };
+    E.main.querySelector('[data-grade]').classList.add('selecionando');
+    marcarSelecao();
   }
 
-  // ---------------------------------------------------- editor de célula
-  function editarCelula(td, fid, data) {
-    E.main.querySelectorAll('td.cel.sel').forEach((x) => x.classList.remove('sel'));
-    td.classList.add('sel');
+  function moverArraste(ev) {
+    if (!arraste) return;
+    const td = ev.target.closest('td.cel');
+    if (!td) return;
+    const k = chaveTd(td);
+    if (k !== arraste.inicio) arraste.moveu = true;
+    E.sel = retangulo(arraste.inicio, k);
+    marcarSelecao();
+  }
+
+  // Um único ouvinte global (o editor é recriado a cada navegação)
+  document.addEventListener('mouseup', () => {
+    if (!arraste || !E) return;
+    const { inicio, moveu } = arraste;
+    arraste = null;
+    E.main.querySelector('[data-grade]')?.classList.remove('selecionando');
+    if (!moveu) { const td = tdDaChave(inicio); if (td) editarDias(td, [inicio]); }
+    else if (E.sel.size > 1) editarDias(E.main.querySelector('[data-editar-sel]') || tdDaChave(inicio), [...E.sel]);
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (!E || !E.sel || !document.body.contains(E.main)) return;
+    if (ev.key === 'Escape' && E.sel.size && !document.querySelector('.popover, .fundo')) limparSelecao();
+    if ((ev.key === 'Delete' || ev.key === 'Backspace') && E.sel.size && !bloqueada()
+      && !document.querySelector('.popover, .fundo') && !ev.target.closest('input, textarea, select')) {
+      E.sel.forEach((k) => { const [f, d] = k.split('|'); if (E.itens[f]) delete E.itens[f][d]; });
+      const n = E.sel.size;
+      limparSelecao(); alterou();
+      UI.toast(`${n} ${n === 1 ? 'dia limpo' : 'dias limpos'}.`);
+    }
+  });
+
+  function cliqueGrade(ev) {
+    const linha = ev.target.closest('[data-linha]');
+    if (linha) menuLinha(linha, Number(linha.dataset.linha));
+  }
+
+  // ---------------------------------------------------- editor de dia(s)
+  /** Edita um dia (com opções de "aplicar em") ou vários dias selecionados de uma vez. */
+  function editarDias(ancora, chaves) {
+    const varios = chaves.length > 1;
+    const [fid0, data0] = chaves[0].split('|');
+    const fid = Number(fid0), data = data0;
     const f = S.func(fid);
-    const atual = (E.itens[fid] || {})[data];
+    const atual = varios
+      ? chaves.map((k) => { const [a, b] = k.split('|'); return (E.itens[a] || {})[b]; }).find(Boolean)
+      : (E.itens[fid] || {})[data];
     const st = {
       tipo: atual?.tipo || 'trabalho',
       turno_id: atual?.turno_id || '',
       blocos: atual?.blocos?.length ? atual.blocos : (S.turno(atual?.turno_id)?.blocos || []),
+      obs: varios ? '' : atual?.obs || '',
     };
     if (!atual) {
       // Dia vazio: sugere o turno que a pessoa já usa no mesmo dia da semana (ou o primeiro ativo)
+      // senão, o palpite pela loja e dia da semana; por último, o primeiro turno ativo
       const mesmoDia = Object.entries(E.itens[fid] || {}).find(([d, it]) => U.dow(d) === U.dow(data) && it.turno_id && S.turno(it.turno_id)?.ativo);
-      const t = mesmoDia ? S.turno(mesmoDia[1].turno_id) : S.turnos.find((x) => x.ativo);
+      const palpite = palpiteTurno(f?.loja || E.escala.loja, (U.dow(data) + 6) % 7);
+      const t = mesmoDia ? S.turno(mesmoDia[1].turno_id) : palpite ? S.turno(palpite) : S.turnos.find((x) => x.ativo);
       if (t) { st.turno_id = t.id; st.blocos = t.blocos.map((b) => [...b]); }
+      // Dia sem turno da loja (ex.: sábado no administrativo): já começa como folga
+      if (!mesmoDia && !palpite && f?.loja && S.turnos.some((x) => x.ativo && semAcento(x.nome).includes(semAcento(f.loja)))) st.tipo = 'folga';
     }
-    Object.assign(st, {
-      obs: atual?.obs || '',
-    });
     const fer = S.feriadosMapa()[data];
-    const oc = E.analise.celulas[`${fid}|${data}`] || [];
+    const oc = varios ? [] : E.analise.celulas[`${fid}|${data}`] || [];
     const ativos = S.turnos.filter((t) => t.ativo || t.id === Number(st.turno_id));
-    const p = UI.popover(td, `
-      <div class="popover-cab"><div class="t">${esc(f.nome)}</div>
-        <div class="muted small">${U.DOW_LONGO[U.dow(data)]}, ${U.dataBR(data)}${fer ? ` · <span style="color:var(--erro)">${esc(fer)}</span>` : ''}</div></div>
+    const pessoas = [...new Set(chaves.map((k) => k.split('|')[0]))].map((id) => S.func(id)?.nome).filter(Boolean);
+    const datas = [...new Set(chaves.map((k) => k.split('|')[1]))].sort();
+    const cab = varios
+      ? `<div class="t">${chaves.length} dias selecionados</div>
+         <div class="muted small">${esc(pessoas.slice(0, 3).join(', '))}${pessoas.length > 3 ? ` e mais ${pessoas.length - 3}` : ''} · ${U.ddmm(datas[0])} a ${U.ddmm(datas[datas.length - 1])}</div>`
+      : `<div class="t">${esc(f.nome)}</div>
+         <div class="muted small">${U.DOW_LONGO[U.dow(data)]}, ${U.dataBR(data)}${fer ? ` · <span style="color:var(--erro)">${esc(fer)}</span>` : ''}</div>`;
+    const nomeDia = U.DOW_LONGO[U.dow(data)].toLowerCase();
+    const p = UI.popover(ancora, `
+      <div class="popover-cab">${cab}</div>
       <div class="popover-corpo">
         ${oc.length ? `<div class="stack" style="gap:6px">${oc.map((o) => `<div class="aviso ${o.sev}" style="padding:8px 10px">${ic(SEV_IC[o.sev])}<div class="small">${esc(o.msg)}</div></div>`).join('')}</div>` : ''}
         <div class="segmentado" data-tipo>${Object.entries(TIPOS).map(([k, t]) => `<button type="button" data-k="${k}" class="${st.tipo === k ? 'ativo' : ''}">${k === 'folga' ? 'Folga' : k === 'compensacao' ? 'Compens.' : t.nome}</button>`).join('')}</div>
         <div data-trab class="stack" style="gap:12px">
           <label class="campo"><span>Modelo de turno</span><select class="inp" data-turno>
-            <option value="">Personalizado</option>${ativos.map((t) => `<option value="${t.id}" ${Number(st.turno_id) === t.id ? 'selected' : ''}>${esc(t.nome)}</option>`).join('')}</select></label>
-          <div data-blocos></div>
+            <option value="">Personalizado</option>${ativos.map((t) => `<option value="${t.id}" ${Number(st.turno_id) === t.id ? 'selected' : ''}>${esc(t.nome)} (${UI.faixa(t.blocos)})</option>`).join('')}</select></label>
+          <div class="campo"><span>Horários <small class="muted" style="font-weight:400">· pode digitar 0730 ou 7h30</small></span><div data-blocos></div></div>
           <div class="resumo-turno" data-res></div>
         </div>
         <label class="campo"><span>Observação</span><input class="inp" data-obs value="${esc(st.obs)}" placeholder="Opcional"></label>
-        <label class="campo"><span>Aplicar em</span><select class="inp" data-alvo>
+        ${varios ? '' : `<label class="campo"><span>Aplicar em</span><select class="inp" data-alvo>
           <option value="dia">Somente este dia</option>
-          <option value="dow">Todas as ${U.DOW_LONGO[U.dow(data)].toLowerCase()}s do período</option>
-          <option value="semana">Seg a sex desta semana em que já trabalha</option>
-          <option value="uteis">Seg a sex de todo o período em que já trabalha</option>
-        </select></label>
+          <option value="dow">Todas as ${nomeDia}s do período</option>
+          <option value="semana">Seg a sex desta semana</option>
+          <option value="uteis">Seg a sex de todo o período</option>
+          <option value="linha">Todos os dias de ${esc(f.nome)} no período</option>
+          <option value="equipe">Este dia para toda a equipe</option>
+        </select><small data-alvo-dica class="muted"></small></label>`}
       </div>
-      <div class="popover-rodape"><button class="btn perigo" data-limpar>${ic('lixo')}</button><span class="spacer"></span>
-        <button class="btn" data-cancelar>Cancelar</button><button class="btn primario" data-aplicar>${ic('check')} Aplicar</button></div>`);
+      <div class="popover-rodape"><button class="btn perigo" data-limpar title="${varios ? 'Limpar os dias selecionados' : 'Limpar este dia'}">${ic('lixo')}</button><span class="spacer"></span>
+        <button class="btn" data-cancelar>Cancelar</button><button class="btn primario" data-aplicar>${ic('check')} Aplicar${varios ? ` em ${chaves.length}` : ''}</button></div>`);
 
     const mostrarTrab = () => { p.$('[data-trab]').style.display = st.tipo === 'trabalho' ? '' : 'none'; };
     const res = () => { p.$('[data-res]').innerHTML = UI.resumoTurno(st.blocos); };
@@ -535,6 +751,14 @@ const Escalas = (() => {
       res();
     });
     mostrarTrab(); res();
+
+    const dicaAlvo = () => {
+      const el = p.$('[data-alvo-dica]'); if (!el) return;
+      const v = p.$('[data-alvo]').value;
+      el.textContent = (v === 'uteis' || v === 'linha') && st.tipo === 'trabalho'
+        ? 'Folgas, férias e afastamentos já marcados são mantidos.' : '';
+    };
+    p.$('[data-alvo]')?.addEventListener('change', dicaAlvo);
     p.$('[data-tipo]').addEventListener('click', (ev) => {
       const b = ev.target.closest('button'); if (!b) return;
       st.tipo = b.dataset.k;
@@ -543,20 +767,22 @@ const Escalas = (() => {
         const t = S.turnos.find((x) => x.ativo);
         if (t) { st.turno_id = t.id; st.blocos = t.blocos; p.$('[data-turno]').value = t.id; ed.set(t.blocos); res(); }
       }
-      mostrarTrab();
+      mostrarTrab(); dicaAlvo();
     });
     p.$('[data-turno]').addEventListener('change', (ev) => {
       st.turno_id = ev.target.value;
       const t = S.turno(st.turno_id);
       if (t) { st.blocos = t.blocos.map((b) => [...b]); ed.set(st.blocos); res(); }
     });
-    const fechar = () => { p.fechar(); td.classList.remove('sel'); };
+    const fechar = () => { p.fechar(); limparSelecao(); };
     p.$('[data-cancelar]').addEventListener('click', fechar);
     p.$('[data-limpar]').addEventListener('click', () => {
-      if (E.itens[fid]) delete E.itens[fid][data];
+      chaves.forEach((k) => { const [a, b] = k.split('|'); if (E.itens[a]) delete E.itens[a][b]; });
       fechar(); alterou();
     });
     p.$('[data-aplicar]').addEventListener('click', () => {
+      // Confirma um horário que ainda esteja sendo digitado
+      if (document.activeElement && document.activeElement.matches('[data-mask=hora]')) document.activeElement.blur();
       if (st.tipo === 'trabalho' && !ed.get().length) { UI.toast('Informe ao menos um período de trabalho.', 'erro'); return; }
       const novo = {
         tipo: st.tipo,
@@ -564,17 +790,31 @@ const Escalas = (() => {
         blocos: st.tipo === 'trabalho' ? ed.get().map((b) => [...b]) : [],
         obs: p.$('[data-obs]').value.trim(),
       };
-      const alvo = p.$('[data-alvo]').value;
-      let datas = [data];
-      const util = (d) => U.dow(d) >= 1 && U.dow(d) <= 5;
-      const jaTrabalha = (d) => d === data || CLT.ehTrabalho((E.itens[fid] || {})[d]);
-      if (alvo === 'dow') datas = dias().filter((d) => U.dow(d) === U.dow(data));
-      if (alvo === 'semana') datas = dias().filter((d) => U.segunda(d) === U.segunda(data) && util(d) && jaTrabalha(d));
-      if (alvo === 'uteis') datas = dias().filter((d) => util(d) && jaTrabalha(d));
-      E.itens[fid] ||= {};
-      datas.forEach((d) => { E.itens[fid][d] = { ...novo, blocos: novo.blocos.map((b) => [...b]) }; });
+      let alvos = chaves;
+      if (!varios) {
+        const alvo = p.$('[data-alvo]').value;
+        const util = (d) => U.dow(d) >= 1 && U.dow(d) <= 5;
+        // Ao espalhar um turno, não apaga folgas/afastamentos já marcados
+        const livre = (f2, d) => {
+          const it = (E.itens[f2] || {})[d];
+          return d === data && f2 === fid || novo.tipo !== 'trabalho' || !it || it.tipo === 'trabalho';
+        };
+        let ds = [data], fs = [fid];
+        if (alvo === 'dow') ds = dias().filter((d) => U.dow(d) === U.dow(data));
+        if (alvo === 'semana') ds = dias().filter((d) => U.segunda(d) === U.segunda(data) && util(d));
+        if (alvo === 'uteis') ds = dias().filter(util);
+        if (alvo === 'linha') ds = dias();
+        if (alvo === 'equipe') fs = [...E.funcs];
+        alvos = [];
+        fs.forEach((f2) => ds.forEach((d) => { if (alvo === 'dia' || livre(f2, d)) alvos.push(`${f2}|${d}`); }));
+      }
+      alvos.forEach((k) => {
+        const [a, b] = k.split('|');
+        E.itens[a] ||= {};
+        E.itens[a][b] = { ...novo, blocos: novo.blocos.map((x) => [...x]) };
+      });
       fechar(); alterou();
-      if (datas.length > 1) UI.toast(`Aplicado em ${datas.length} dias.`);
+      if (alvos.length > 1) UI.toast(`Aplicado em ${alvos.length} dias.`);
     });
   }
 
@@ -636,17 +876,19 @@ const Escalas = (() => {
       corpo: `<div class="form-grade">
         <label class="campo inteiro"><span>Título</span><input class="inp" data-f="titulo" value="${esc(e.titulo)}"></label>
         <label class="campo inteiro"><span>Loja / setor</span><input class="inp" data-f="loja" value="${esc(e.loja || '')}"></label>
-        <label class="campo"><span>Início</span><input class="inp" type="date" data-f="inicio" value="${e.inicio}"></label>
-        <label class="campo"><span>Fim</span><input class="inp" type="date" data-f="fim" value="${e.fim}"></label>
+        <label class="campo"><span>Início</span>${UI.campoData(e.inicio, 'data-f="inicio"')}</label>
+        <label class="campo"><span>Fim</span>${UI.campoData(e.fim, 'data-f="fim"')}</label>
         <label class="campo inteiro"><span>Observações</span><textarea class="inp" data-f="observacoes" rows="4">${esc(e.observacoes || '')}</textarea></label>
       </div><div class="aviso info" style="margin-top:14px">${ic('info')}<div>Ao encurtar o período, os dias que ficarem de fora são descartados quando você salvar.</div></div>`,
       rodape: '<button class="btn" data-fechar>Cancelar</button><button class="btn primario" data-ok>Aplicar</button>',
     });
     m.$('[data-ok]').addEventListener('click', async () => {
       const v = (k) => m.$(`[data-f=${k}]`).value;
-      if (!v('inicio') || !v('fim') || v('fim') < v('inicio')) { UI.toast('Período inválido.', 'erro'); return; }
-      if (U.diffDias(v('inicio'), v('fim')) > 62) { UI.toast('O período máximo é de 9 semanas.', 'erro'); return; }
-      Object.assign(E.escala, { titulo: v('titulo'), loja: v('loja'), inicio: v('inicio'), fim: v('fim'), observacoes: v('observacoes') });
+      const ini = U.lerData(v('inicio')), fimN = U.lerData(v('fim'));
+      if (!ini || !fimN) { UI.toast('Data inválida. Use dd/mm/aaaa ou só os números (01012027).', 'erro'); return; }
+      if (fimN < ini) { UI.toast('A data final é anterior à inicial.', 'erro'); return; }
+      if (U.diffDias(ini, fimN) > 62) { UI.toast('O período máximo é de 9 semanas.', 'erro'); return; }
+      Object.assign(E.escala, { titulo: v('titulo'), loja: v('loja'), inicio: ini, fim: fimN, observacoes: v('observacoes') });
       try { await recarregarContexto(); } catch (err) { UI.toast(err.message, 'erro'); }
       if (E.diaCob < E.escala.inicio || E.diaCob > E.escala.fim) E.diaCob = E.escala.inicio;
       m.fechar(); alterou();
@@ -858,14 +1100,16 @@ const Escalas = (() => {
       titulo: 'Duplicar escala', sub: 'Cria um rascunho com o mesmo padrão em outro período.',
       corpo: `<div class="form-grade">
         <label class="campo inteiro"><span>Título</span><input class="inp" data-t value="${esc(E.escala.titulo)} (cópia)"></label>
-        <label class="campo"><span>Novo início</span><input class="inp" type="date" data-i value="${sugestao}"></label>
+        <label class="campo"><span>Novo início</span>${UI.campoData(sugestao, 'data-i')}</label>
         <div class="campo"><span>Duração</span><div class="muted" style="padding-top:8px">${n} dias</div></div>
       </div>${E.sujo ? `<div class="aviso alerta" style="margin-top:14px">${ic('alerta')}<div>Há alterações não salvas: a cópia usa a última versão salva.</div></div>` : ''}`,
       rodape: '<button class="btn" data-fechar>Cancelar</button><button class="btn primario" data-ok>Duplicar</button>',
     });
     m.$('[data-ok]').addEventListener('click', async () => {
+      const inicio = U.lerData(m.$('[data-i]').value);
+      if (!inicio) { UI.toast('Data de início inválida. Use dd/mm/aaaa.', 'erro'); return; }
       try {
-        const r = await API.post(`/api/escalas/${E.id}/duplicar`, { titulo: m.$('[data-t]').value, inicio: m.$('[data-i]').value });
+        const r = await API.post(`/api/escalas/${E.id}/duplicar`, { titulo: m.$('[data-t]').value, inicio });
         m.fechar();
         E.sujo = false;
         UI.toast('Cópia criada.');

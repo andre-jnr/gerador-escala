@@ -65,7 +65,7 @@ const UI = (() => {
     const fundo = document.createElement('div');
     fundo.className = 'fundo';
     fundo.innerHTML = `
-      <div class="modal ${largo ? 'largo' : ''}" role="dialog" aria-modal="true">
+      <div class="modal ${largo === 'extra' ? 'extra-largo' : largo ? 'largo' : ''}" role="dialog" aria-modal="true">
         <div class="modal-cab">
           <div><h2>${titulo}</h2>${sub ? `<div class="sub">${sub}</div>` : ''}</div>
           <button class="btn fantasma pequeno icone" data-fechar style="margin-left:auto" aria-label="Fechar">${ic('x')}</button>
@@ -110,17 +110,35 @@ const UI = (() => {
     el.style.width = `${largura}px`;
     el.innerHTML = html;
     document.getElementById('camada').appendChild(el);
-    const r = ancora.getBoundingClientRect();
-    const h = el.offsetHeight;
-    let left = r.right + 8;
-    if (left + largura > window.innerWidth - 12) left = r.left - largura - 8;
-    if (left < 12) left = Math.max(12, Math.min(window.innerWidth - largura - 12, r.left));
-    let top = Math.min(r.top, window.innerHeight - h - 12);
-    el.style.left = `${left}px`;
-    el.style.top = `${Math.max(12, top)}px`;
+    // Posiciona ao lado da âncora sem sair da tela. O corpo rola quando não cabe;
+    // em telas estreitas vira uma folha presa na parte de baixo.
+    const posicionar = () => {
+      if (window.innerWidth < 640) {
+        el.classList.add('folha');
+        el.style.left = el.style.top = el.style.width = '';
+        return;
+      }
+      el.classList.remove('folha');
+      const r = ancora.getBoundingClientRect();
+      const w = Math.min(largura, window.innerWidth - 24);
+      el.style.width = `${w}px`;
+      const h = Math.min(el.scrollHeight, window.innerHeight - 24);
+      let left = r.right + 8;
+      if (left + w > window.innerWidth - 12) left = r.left - w - 8;
+      if (left < 12) left = Math.max(12, Math.min(window.innerWidth - w - 12, r.left));
+      const top = Math.max(12, Math.min(r.top, window.innerHeight - h - 12));
+      el.style.left = `${left}px`;
+      el.style.top = `${top}px`;
+    };
+    posicionar();
+    const obs = new ResizeObserver(posicionar);
+    obs.observe(el.querySelector('.popover-corpo') || el);
+    window.addEventListener('resize', posicionar);
     const fora = (e) => { if (!el.contains(e.target) && !e.target.closest('.fundo')) fechar(); };
     const fechar = () => {
       el.remove();
+      obs.disconnect();
+      window.removeEventListener('resize', posicionar);
       document.removeEventListener('mousedown', fora, true);
       const i = pilha.indexOf(fechar);
       if (i >= 0) pilha.splice(i, 1);
@@ -129,8 +147,87 @@ const UI = (() => {
     setTimeout(() => document.addEventListener('mousedown', fora, true), 0);
     pilha.push(fechar);
     popAtual = fechar;
-    return { el, fechar, $: (s) => el.querySelector(s), $$: (s) => [...el.querySelectorAll(s)] };
+    return { el, fechar, posicionar, $: (s) => el.querySelector(s), $$: (s) => [...el.querySelectorAll(s)] };
   }
+
+  // ------------------------------------------------ campos de data, hora e número
+  // Campos de texto com máscara: aceitam "01012027", "1/1/27", "0730", "7h30"...
+  // O botão de calendário abre o seletor nativo do navegador como atalho.
+
+  /** Campo de data. `valor` em ISO; o atributo extra (ex.: data-v="inicio") vai no campo de texto. */
+  const campoData = (valor = '', attrs = '') => `<span class="campo-data">
+      <input type="text" class="inp data" inputmode="numeric" autocomplete="off" placeholder="dd/mm/aaaa" maxlength="10"
+        data-mask="data" value="${valor ? U.dataBR(valor) : ''}" ${attrs}>
+      <button type="button" class="btn-cal" data-cal tabindex="-1" title="Abrir calendário">${ic('calendario')}</button>
+      <input type="date" class="cal-nativo" tabindex="-1" aria-hidden="true">
+    </span>`;
+
+  /** Campo de horário "HH:MM". */
+  const campoHora = (valor = '', attrs = '') =>
+    `<input type="text" class="inp hora" inputmode="numeric" autocomplete="off" placeholder="hh:mm" maxlength="5" data-mask="hora" value="${valor || ''}" ${attrs}>`;
+
+  /** Campo numérico que aceita vírgula. */
+  const campoNumero = (valor = '', attrs = '') =>
+    `<input type="text" class="inp numero" inputmode="decimal" autocomplete="off" data-mask="numero" value="${String(valor ?? '').replace('.', ',')}" ${attrs}>`;
+
+  function mascaraData(v, digitouBarra) {
+    const partes = v.split('/').map((p) => p.replace(/\D/g, ''));
+    for (let i = 0; i < Math.min(2, partes.length - 1); i++) if (partes[i].length === 1) partes[i] = '0' + partes[i];
+    const d = partes.join('').slice(0, 8);
+    let out = d.slice(0, 2);
+    if (d.length > 2) out += '/' + d.slice(2, 4);
+    if (d.length > 4) out += '/' + d.slice(4);
+    if (digitouBarra && (d.length === 2 || d.length === 4)) out += '/';
+    return out;
+  }
+
+  document.addEventListener('input', (e) => {
+    const t = e.target;
+    if (!t.dataset || !t.dataset.mask) return;
+    t.classList.remove('invalido');
+    const apagando = (e.inputType || '').startsWith('delete');
+    if (t.dataset.mask === 'data' && !apagando) t.value = mascaraData(t.value, e.data === '/' || e.data === '.' || e.data === '-');
+    if (t.dataset.mask === 'hora' && !apagando) {
+      let v = t.value.replace(/[^\d:h]/gi, '').replace(/h/gi, ':');
+      if (!v.includes(':') && v.length === 4) v = `${v.slice(0, 2)}:${v.slice(2)}`;
+      t.value = v.slice(0, 5);
+    }
+    if (t.dataset.mask === 'numero') t.value = t.value.replace(/[^\d,.]/g, '');
+  });
+
+  // Ao sair do campo, normaliza ("730" → "07:30", "010127" → "01/01/2027") ou marca como inválido.
+  // Roda na captura para que os outros ouvintes de "change" já recebam o valor normalizado.
+  document.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t.dataset || !t.dataset.mask || !t.value.trim()) return;
+    if (t.dataset.mask === 'data') {
+      const iso = U.lerData(t.value);
+      if (iso) t.value = U.dataBR(iso); else t.classList.add('invalido');
+    }
+    if (t.dataset.mask === 'hora') {
+      const h = U.lerHora(t.value);
+      if (h) t.value = h; else t.classList.add('invalido');
+    }
+  }, true);
+
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-cal]');
+    if (!b) return;
+    const caixa = b.closest('.campo-data');
+    const texto = caixa.querySelector('[data-mask=data]');
+    const nativo = caixa.querySelector('.cal-nativo');
+    nativo.value = U.lerData(texto.value) || '';
+    try { nativo.showPicker(); } catch { nativo.focus(); nativo.click(); }
+  });
+  document.addEventListener('change', (e) => {
+    const n = e.target;
+    if (!n.classList || !n.classList.contains('cal-nativo') || !n.value) return;
+    e.stopPropagation();
+    const texto = n.closest('.campo-data').querySelector('[data-mask=data]');
+    texto.value = U.dataBR(n.value);
+    texto.classList.remove('invalido');
+    texto.dispatchEvent(new Event('change', { bubbles: true }));
+  }, true);
 
   /** Barra horizontal com os blocos de trabalho entre `de` e `ate` (minutos). */
   function linhaTempo(blocos, cor, de = 6 * 60, ate = 24 * 60) {
@@ -165,31 +262,49 @@ const UI = (() => {
    */
   function editorBlocos(container, blocosIniciais, onChange) {
     let blocos = (blocosIniciais || []).map((b) => [...b]);
+    // Atualiza só as legendas "intervalo de 1h" entre os períodos, sem recriar os campos
+    // (recriar durante a digitação faria o Tab perder o foco).
+    const atualizarPausas = () => {
+      container.querySelectorAll('.pausa-linha').forEach((el) => {
+        const i = Number(el.dataset.pausa);
+        const ant = blocos[i - 1], atual = blocos[i];
+        if (!ant || !atual || !ant[1] || !atual[0]) { el.textContent = ''; return; }
+        const min = U.resumoBlocos([ant, atual]).pausas[0]?.min;
+        el.textContent = min == null ? '' : `${min >= 60 ? 'intervalo' : 'pausa'} de ${U.dur(min)}`;
+      });
+    };
     const render = () => {
-      const r = U.resumoBlocos(blocos.filter(([a, b]) => a && b));
       let html = '<div class="blocos-edit">';
       blocos.forEach(([a, b], i) => {
-        if (i > 0 && r.pausas[i - 1]) {
-          const p = r.pausas[i - 1];
-          html += `<div class="pausa-linha num">${p.min >= 60 ? 'intervalo' : 'pausa'} de ${U.dur(p.min)}</div>`;
-        }
+        if (i > 0) html += `<div class="pausa-linha num" data-pausa="${i}"></div>`;
         html += `<div class="bloco-linha">
           <span class="idx">${i + 1}</span>
-          <input type="time" class="inp hora" data-i="${i}" data-p="0" value="${a || ''}">
+          ${campoHora(a, `data-i="${i}" data-p="0" aria-label="Entrada ${i + 1}"`)}
           <span class="sep">até</span>
-          <input type="time" class="inp hora" data-i="${i}" data-p="1" value="${b || ''}">
+          ${campoHora(b, `data-i="${i}" data-p="1" aria-label="Saída ${i + 1}"`)}
           <button type="button" class="btn fantasma pequeno icone" data-rem="${i}" title="Remover período">${ic('x')}</button>
         </div>`;
       });
       html += `<div><button type="button" class="btn pequeno" data-add>${ic('mais')} Adicionar período</button></div></div>`;
       container.innerHTML = html;
+      atualizarPausas();
     };
     const emitir = () => onChange && onChange(blocos.filter(([a, b]) => a && b));
     container.addEventListener('change', (e) => {
       const inp = e.target.closest('input[data-i]');
       if (!inp) return;
-      blocos[Number(inp.dataset.i)][Number(inp.dataset.p)] = inp.value;
-      render(); emitir();
+      const h = U.lerHora(inp.value);
+      if (!h) { if (inp.value.trim()) UI.toast('Horário inválido. Ex.: 07:30, 0730 ou 7h30.', 'erro'); return; }
+      blocos[Number(inp.dataset.i)][Number(inp.dataset.p)] = h;
+      atualizarPausas(); emitir();
+    });
+    // Enter confirma o horário e passa para o próximo campo
+    container.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || !e.target.matches('input[data-i]')) return;
+      e.preventDefault();
+      const campos = [...container.querySelectorAll('input[data-i]')];
+      const prox = campos[campos.indexOf(e.target) + 1];
+      if (prox) { prox.focus(); prox.select(); } else e.target.blur();
     });
     container.addEventListener('click', (e) => {
       const rem = e.target.closest('[data-rem]');
@@ -227,5 +342,8 @@ const UI = (() => {
     return `<div class="cx ${item.tipo}" title="${U.esc(tipo.nome + (item.obs ? ' — ' + item.obs : ''))}">${tipo.curto}</div>`;
   }
 
-  return { ic, preencherIcones, toast, modal, confirmar, popover, fecharPopover, linhaTempo, resumoTurno, faixa, editorBlocos, celula };
+  return {
+    ic, preencherIcones, toast, modal, confirmar, popover, fecharPopover, linhaTempo, resumoTurno, faixa, editorBlocos, celula,
+    campoData, campoHora, campoNumero,
+  };
 })();

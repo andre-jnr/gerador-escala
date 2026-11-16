@@ -129,7 +129,8 @@ const CLT = (() => {
         totalMin += T;
 
         if (T > 600) add('erro', 'jornada', fid, data, `Jornada de ${U.dur(T)}: passa do máximo de 10h (8h + 2h extras).`);
-        else if (T > 480) add('alerta', 'jornada', fid, data, `Jornada de ${U.dur(T)}: ${U.dur(T - 480)} de hora extra, exige acordo de prorrogação.`);
+        else if (T > 480 && Number(f.compensacao)) add('info', 'jornada', fid, data, `Jornada de ${U.dur(T)} coberta pelo acordo de compensação (art. 59, § 2º): até 10h por dia, dentro da jornada semanal.`);
+        else if (T > 480) add('alerta', 'jornada', fid, data, `Jornada de ${U.dur(T)}: ${U.dur(T - 480)} de hora extra. Sem acordo de compensação no cadastro, exige acordo de prorrogação.`);
 
         const maior = pausas.reduce((m, p) => (p.min > m.min ? p : m), { min: 0 });
         let legal = null;
@@ -274,11 +275,25 @@ const CLT = (() => {
     return r;
   }
 
+  /** Situação de um membro do gerador: quais dias têm turno e que regras de folga se aplicam. */
+  function perfilMembro(m) {
+    const turnoDia = (j) => (m.t[j] ? S.turno(m.t[j]) : null);
+    const fixas = [0, 1, 2, 3, 4, 5, 6].filter((j) => !turnoDia(j));
+    return {
+      turnoDia,
+      fixas,
+      trabalhaDomingo: !!turnoDia(6),
+      // Só quem tem turno nos 7 dias precisa de folga rotativa; quem já tem dia sem turno
+      // (ex.: administrativo sem sábado e domingo) usa esses dias como folga fixa.
+      precisaRotativa: fixas.length === 0,
+    };
+  }
+
   /**
    * Gera os itens de uma escala.
-   * membros: [{ f, tSemana, tSab, tDom }] (ids de turno; vazio = não trabalha nesse dia)
-   * freq: 'auto' | '2' | '3' — de quantas em quantas semanas o domingo é folga
-   * diasFolga: índices 0..5 (seg..sáb) onde pode cair a folga semanal
+   * membros: [{ f, t: [seg, ter, qua, qui, sex, sáb, dom] }] (ids de turno; vazio = folga fixa nesse dia)
+   * freq: 'auto' | '2' | '3' — de quantas em quantas semanas o domingo é folga (só para quem trabalha domingo)
+   * diasFolga: índices 0..5 (seg..sáb) onde pode cair a folga rotativa (só para quem tem turno nos 7 dias)
    */
   function gerar({ inicio, semanas, membros, freq = 'auto', diasFolga = [0, 1, 2, 3, 4], contexto = {}, config = {} }) {
     const itens = {};
@@ -287,6 +302,7 @@ const CLT = (() => {
 
     membros.forEach((m, i) => {
       const f = m.f;
+      const p = perfilMembro(m);
       const ctx = contexto[f.id] || contexto[String(f.id)] || {};
       const k = freq === 'auto' ? (f.sexo === 'F' && ligado(config, 'art386_mulheres') ? 2 : 3) : Number(freq);
 
@@ -305,31 +321,31 @@ const CLT = (() => {
       itens[f.id] = {};
       for (let w = 0; w < semanas; w++) {
         const base = w * 7;
-        const domFolga = w >= primeiraFolgaDom && (w - primeiraFolgaDom) % k === 0;
+        const domFolga = p.trabalhaDomingo && w >= primeiraFolgaDom && (w - primeiraFolgaDom) % k === 0;
         const cont = (folgasNaSemana[w] ||= [0, 0, 0, 0, 0, 0, 0]);
 
-        // A folga do dia útil não pode deixar mais de 6 dias seguidos de trabalho
-        const maxIdx = ultimo + 7 - base;
-        let candidatos = dias.filter((d) => d <= maxIdx);
-        if (!candidatos.length) candidatos = [dias[0] ?? 0];
-        candidatos.sort((a, b) => cont[a] - cont[b] || ((a - i - w + 70) % 7) - ((b - i - w + 70) % 7));
-        const folga = candidatos[0];
-        cont[folga]++;
+        let folga = null;
+        if (p.precisaRotativa) {
+          // A folga do dia útil não pode deixar mais de 6 dias seguidos de trabalho
+          const maxIdx = ultimo + 7 - base;
+          let candidatos = dias.filter((d) => d <= maxIdx);
+          if (!candidatos.length) candidatos = [dias[0] ?? 0];
+          candidatos.sort((a, b) => cont[a] - cont[b] || ((a - i - w + 70) % 7) - ((b - i - w + 70) % 7));
+          folga = candidatos[0];
+          cont[folga]++;
+        }
         if (domFolga) cont[6]++;
 
         for (let j = 0; j < 7; j++) {
           const data = U.addDias(inicio, base + j);
-          const tid = j === 5 ? m.tSab : j === 6 ? m.tDom : m.tSemana;
-          const t = tid ? S.turno(tid) : null;
+          const t = p.turnoDia(j);
           if (j === folga || (j === 6 && domFolga) || !t) {
             itens[f.id][data] = { tipo: 'folga', turno_id: null, blocos: [], obs: '' };
           } else {
             itens[f.id][data] = { tipo: 'trabalho', turno_id: t.id, blocos: t.blocos.map((b) => [...b]), obs: '' };
           }
         }
-        // Se o modelo de domingo está vazio, o domingo vira folga e também conta como descanso
-        const domingoLivre = domFolga || !(m.tDom && S.turno(m.tDom));
-        ultimo = domingoLivre ? base + 6 : base + folga;
+        if (p.precisaRotativa) ultimo = domFolga ? base + 6 : base + folga;
       }
     });
     return itens;
@@ -342,5 +358,5 @@ const CLT = (() => {
     return 1440 + b.inicio - a.fim;
   }
 
-  return { REGRAS, analisar, contarPorFaixa, gerar, descansoEntre, ehTrabalho };
+  return { REGRAS, analisar, contarPorFaixa, gerar, perfilMembro, descansoEntre, ehTrabalho };
 })();

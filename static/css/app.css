@@ -62,7 +62,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .row { display: flex; align-items: center; gap: 8px; }
 .row.wrap { flex-wrap: wrap; }
 .spacer { flex: 1; }
-.hidden { display: none !important; }
+.hidden, [hidden] { display: none !important; }
 
 /* ---------------------------------------------------- estrutura */
 .app { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
@@ -244,6 +244,14 @@ textarea.inp { height: auto; min-height: 72px; padding: 9px 11px; resize: vertic
   animation: subir .18s cubic-bezier(.2, .8, .2, 1);
 }
 .modal.largo { width: min(880px, 100%); }
+.modal.extra-largo { width: min(1180px, 100%); }
+@media (max-width: 700px), (max-height: 640px) {
+  .fundo { padding: 8px; }
+  .modal { max-height: calc(100vh - 16px); }
+  .modal-cab { padding: 14px 16px 10px; }
+  .modal-corpo { padding: 4px 16px 14px; }
+  .modal-rodape { padding: 10px 16px; }
+}
 .modal-cab { padding: 18px 22px 14px; display: flex; align-items: flex-start; gap: 12px; }
 .modal-cab h2 { font-size: 17px; }
 .modal-cab .sub { color: var(--muted); font-size: 13px; margin-top: 3px; }
@@ -265,13 +273,31 @@ textarea.inp { height: auto; min-height: 72px; padding: 9px 11px; resize: vertic
 .popover {
   position: fixed; z-index: 60; background: #fff; border-radius: 12px;
   box-shadow: var(--shadow-lg); border: 1px solid var(--line);
-  width: 380px; max-height: calc(100vh - 24px); overflow: auto;
+  width: 380px; max-height: calc(100vh - 24px);
+  display: flex; flex-direction: column; overflow: hidden;
   animation: subir .14s ease-out;
 }
-.popover-cab { padding: 14px 16px 10px; border-bottom: 1px solid var(--line-2); }
+/* Cabeçalho e botões ficam sempre visíveis; só o meio rola */
+.popover-cab { padding: 14px 16px 10px; border-bottom: 1px solid var(--line-2); flex-shrink: 0; }
 .popover-cab .t { font-weight: 600; }
-.popover-corpo { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
-.popover-rodape { padding: 12px 16px; border-top: 1px solid var(--line-2); display: flex; gap: 8px; justify-content: flex-end; }
+.popover-corpo { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; min-height: 0; flex: 1 1 auto; overscroll-behavior: contain; }
+.popover-rodape { padding: 12px 16px; border-top: 1px solid var(--line-2); display: flex; gap: 8px; justify-content: flex-end; flex-shrink: 0; background: #fff; }
+.popover.folha { left: 8px !important; right: 8px; top: auto !important; bottom: 8px; width: auto !important; max-height: 88vh; }
+
+/* campos com máscara */
+.campo-data { position: relative; display: block; }
+.campo-data .inp { padding-right: 38px; font-variant-numeric: tabular-nums; }
+.btn-cal { position: absolute; right: 4px; top: 4px; width: 28px; height: 28px; border: 0; background: transparent; border-radius: 6px; color: var(--muted); cursor: pointer; display: grid; place-items: center; }
+.btn-cal:hover { background: var(--line-2); color: var(--ink); }
+.cal-nativo { position: absolute; right: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
+.inp.invalido { border-color: var(--erro); box-shadow: 0 0 0 3px var(--erro-50); }
+.inp.numero { font-variant-numeric: tabular-nums; }
+
+/* seleção de vários dias na grade */
+.barra-sel { display: flex; align-items: center; gap: 8px; background: var(--brand-50); color: var(--brand-600); border-radius: 9px; padding: 3px 4px 3px 12px; font-size: 13px; font-weight: 500; }
+.grade.selecionando, .grade.selecionando * { user-select: none; }
+.dica-teclas { font-size: 12px; color: var(--faint); }
+kbd { font-family: inherit; font-size: 11px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: #fff; color: var(--ink-2); }
 
 /* ---------------------------------------------------- blocos de horário */
 .blocos-edit { display: flex; flex-direction: column; gap: 8px; }
@@ -359,6 +385,7 @@ textarea.inp { height: auto; min-height: 72px; padding: 9px 11px; resize: vertic
 .grade.bloqueada .cel { cursor: default; }
 .cel:hover .cx { box-shadow: 0 0 0 2px var(--brand-100); }
 .cel.sel .cx { box-shadow: 0 0 0 2px var(--brand); }
+.cel.sel { background: var(--brand-50); }
 .cel.domingo { background: #fffcf7; }
 .cx {
   height: 100%; border-radius: 7px; padding: 6px 8px 5px; display: flex; flex-direction: column; justify-content: center;
@@ -483,7 +510,10 @@ textarea.inp { height: auto; min-height: 72px; padding: 9px 11px; resize: vertic
 .lista-sel label:last-child { border-bottom: 0; }
 .lista-sel label:hover { background: #fafbfd; }
 .tabela-membros td, .tabela-membros th { padding: 8px 10px; }
-.tabela-membros select { height: 32px; font-size: 13px; }
+.tabela-membros select { height: 32px; font-size: 12.5px; min-width: 104px; padding: 0 6px; }
+.tabela-membros th { padding: 8px 6px; }
+.tabela-membros td { padding: 6px; }
+.tabela-membros td:first-child, .tabela-membros th:first-child { padding-left: 12px; min-width: 170px; }
 .aviso { display: flex; gap: 10px; padding: 10px 12px; border-radius: 9px; font-size: 13px; align-items: flex-start; }
 .aviso svg { margin-top: 2px; }
 .aviso.alerta { background: var(--alerta-50); color: #8a4b06; }

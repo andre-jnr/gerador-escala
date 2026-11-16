@@ -77,6 +77,51 @@ const U = (() => {
     };
   };
 
+  /**
+   * Lê uma data digitada: "01012027", "010127", "1/1/2027", "01/01/27", "2027-01-01".
+   * Devolve ISO (YYYY-MM-DD) ou null se for inválida.
+   */
+  const lerData = (texto) => {
+    const t = String(texto || '').trim();
+    if (!t) return null;
+    let d, m, a;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(t)) [a, m, d] = t.split('-').map(Number);
+    else if (/[/.\-]/.test(t)) [d, m, a] = t.split(/[/.\-]/).map((x) => Number(x || NaN));
+    else {
+      const n = t.replace(/\D/g, '');
+      if (n.length !== 6 && n.length !== 8) return null;
+      d = Number(n.slice(0, 2)); m = Number(n.slice(2, 4)); a = Number(n.slice(4));
+    }
+    if (a < 100) a += 2000;
+    const dt = new Date(Date.UTC(a, m - 1, d));
+    if (!a || dt.getUTCFullYear() !== a || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
+    return dt.toISOString().slice(0, 10);
+  };
+
+  /** Lê um horário digitado: "0730", "730", "7", "7:30", "7h30", "07:30". Devolve "HH:MM" ou null. */
+  const lerHora = (texto) => {
+    const t = String(texto || '').trim().toLowerCase();
+    if (!t) return null;
+    let h, m;
+    if (/[:h]/.test(t)) {
+      const [a, b] = t.split(/[:h]/);
+      h = a; m = b || '0';
+    } else {
+      const n = t.replace(/\D/g, '');
+      if (!n || n.length > 4) return null;
+      if (n.length <= 2) { h = n; m = '0'; } else { h = n.slice(0, -2); m = n.slice(-2); }
+    }
+    h = Number(h); m = Number(m);
+    if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || h > 23 || m < 0 || m > 59) return null;
+    return `${pad(h)}:${pad(m)}`;
+  };
+
+  /** Lê número com vírgula ou ponto ("37,5"). */
+  const lerNumero = (texto) => {
+    const n = Number(String(texto ?? '').trim().replace(',', '.'));
+    return String(texto ?? '').trim() === '' || isNaN(n) ? null : n;
+  };
+
   const debounce = (fn, ms = 200) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
   const baixar = (nome, conteudo, tipo = 'text/csv;charset=utf-8') => {
@@ -92,6 +137,7 @@ const U = (() => {
   return {
     pad, DOW, DOW_LONGO, toMin, fmtMin, dur, hora, addDias, diffDias, dow, segunda, intervalo,
     ddmm, dataBR, dataLonga, periodo, quando, esc, iniciais, intervalos, resumoBlocos, debounce, baixar,
+    lerData, lerHora, lerNumero,
   };
 })();
 

@@ -188,12 +188,16 @@ const Telas = (() => {
         <label class="campo"><span>Cargo</span><input class="inp" name="cargo" list="dl-cargos" value="${esc(f.cargo || '')}" placeholder="Ex.: Operadora de caixa"></label>
         <label class="campo"><span>Matrícula</span><input class="inp" name="matricula" value="${esc(f.matricula || '')}"></label>
         <label class="campo"><span>Loja / setor</span><input class="inp" name="loja" list="dl-lojas" value="${esc(f.loja || '')}"></label>
-        <label class="campo"><span>Data de admissão</span><input class="inp" type="date" name="admissao" value="${esc(f.admissao || '')}"></label>
-        <label class="campo"><span>Jornada semanal (horas)</span><input class="inp" type="number" min="1" max="44" step="0.5" name="jornada_semanal" value="${f.jornada_semanal ?? 44}">
-          <small>Até 44h (CF art. 7º, XIII). Jornada parcial: até 30h.</small></label>
+        <label class="campo"><span>Data de admissão</span>${UI.campoData(f.admissao || '', 'name="admissao"')}
+          <small>Pode digitar só os números: 01012027.</small></label>
+        <label class="campo"><span>Jornada semanal (horas)</span>${UI.campoNumero(f.jornada_semanal ?? 44, 'name="jornada_semanal"')}
+          <small>Até 44h (CF art. 7º, XIII). Ex.: 44, 40 ou 37,5.</small></label>
         <label class="campo"><span>Sexo</span><select class="inp" name="sexo">
           <option value="F" ${f.sexo === 'F' ? 'selected' : ''}>Feminino</option><option value="M" ${f.sexo === 'M' ? 'selected' : ''}>Masculino</option></select>
           <small>Usado no revezamento dominical (CLT art. 386).</small></label>
+        <label class="chk inteiro" style="align-items:flex-start"><input type="checkbox" name="compensacao" value="1" ${Number(f.compensacao) ? 'checked' : ''} style="margin-top:2px">
+          <span><span class="pessoa-nome">Tem acordo de compensação de jornada</span><br>
+          <small class="muted">CLT art. 59, § 2º. Permite dias de até 10h para não trabalhar no sábado (ex.: administrativo 5x2). Sem o acordo, dia acima de 8h é hora extra.</small></span></label>
         <label class="campo inteiro"><span>Observações</span><textarea class="inp" name="observacoes">${esc(f.observacoes || '')}</textarea></label>
         <datalist id="dl-cargos">${S.cargos().map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
         <datalist id="dl-lojas">${S.lojas().map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
@@ -203,8 +207,16 @@ const Telas = (() => {
     });
     const salvar = async () => {
       const dados = Object.fromEntries(new FormData(m.$('#form-func')).entries());
-      dados.jornada_semanal = Number(dados.jornada_semanal || 44);
       if (!dados.nome.trim()) { UI.toast('Informe o nome.', 'erro'); return; }
+      const jornada = U.lerNumero(dados.jornada_semanal);
+      if (jornada == null || jornada <= 0 || jornada > 44) { UI.toast('Jornada semanal deve ficar entre 1 e 44 horas.', 'erro'); return; }
+      dados.jornada_semanal = jornada;
+      dados.compensacao = dados.compensacao ? 1 : 0;
+      if (dados.admissao) {
+        const iso = U.lerData(dados.admissao);
+        if (!iso) { UI.toast('Data de admissão inválida. Use dd/mm/aaaa.', 'erro'); return; }
+        dados.admissao = iso;
+      }
       try {
         const r = novo ? await API.post('/api/funcionarios', dados) : await API.put(`/api/funcionarios/${f.id}`, dados);
         await S.carregar();
@@ -267,7 +279,7 @@ const Telas = (() => {
       <div class="cabecalho">
         <div class="perfil"><div class="avatar g">${U.iniciais(f.nome)}</div>
           <div><h1>${esc(f.nome)} ${f.ativo ? '' : '<span class="selo">Inativo</span>'}</h1>
-          <div class="sub">${[f.cargo, f.loja, f.matricula && `Matrícula ${f.matricula}`, `${U.dur(contrato)} semanais`, f.admissao && `Admissão ${U.dataBR(f.admissao)}`].filter(Boolean).map(esc).join(' · ')}</div></div></div>
+          <div class="sub">${[f.cargo, f.loja, f.matricula && `Matrícula ${f.matricula}`, `${U.dur(contrato)} semanais`, Number(f.compensacao) && 'Acordo de compensação', f.admissao && `Admissão ${U.dataBR(f.admissao)}`].filter(Boolean).map(esc).join(' · ')}</div></div></div>
         <div class="acoes"><button class="btn" data-editar>${ic('editar')} Editar cadastro</button></div>
       </div>
       <div class="kpis">
@@ -411,7 +423,7 @@ const Telas = (() => {
                 <div><div class="pessoa-nome">Avisar sobre pausas além do intervalo legal</div><div class="muted small">Súmula 118 do TST. Desligue se a convenção coletiva da categoria prevê o lanche.</div></div></label>
               <label class="interruptor"><input type="checkbox" data-c="cobertura" ${c.cobertura === '1' ? 'checked' : ''}>
                 <div><div class="pessoa-nome">Avisar horários sem ninguém trabalhando</div><div class="muted small">Checagem operacional, não é regra da CLT.</div></div></label>
-              <label class="interruptor" style="align-items:center"><input type="number" class="inp" data-n="limite_semanal" value="${esc(c.limite_semanal || 44)}" min="1" max="44" step="0.5" style="width:80px;height:34px;margin:0">
+              <label class="interruptor" style="align-items:center">${UI.campoNumero(c.limite_semanal || 44, 'data-n="limite_semanal" style="width:80px;height:34px;margin:0"')}
                 <div><div class="pessoa-nome">Limite semanal (horas)</div><div class="muted small">Teto constitucional: 44h.</div></div></label>
               <label class="interruptor" style="align-items:center"><input class="inp" data-n="empresa" value="${esc(c.empresa || '')}" style="width:160px;height:34px;margin:0">
                 <div><div class="pessoa-nome">Nome da empresa</div><div class="muted small">Aparece na impressão da escala.</div></div></label>
@@ -425,7 +437,9 @@ const Telas = (() => {
       const dados = {};
       main.querySelectorAll('[data-c]').forEach((i) => { dados[i.dataset.c] = i.checked ? '1' : '0'; });
       main.querySelectorAll('[data-n]').forEach((i) => { dados[i.dataset.n] = i.value; });
-      if (Number(dados.limite_semanal) > 44 || Number(dados.limite_semanal) <= 0) { UI.toast('O limite semanal deve ficar entre 1h e 44h.', 'erro'); return; }
+      const lim = U.lerNumero(dados.limite_semanal);
+      if (lim == null || lim > 44 || lim <= 0) { UI.toast('O limite semanal deve ficar entre 1h e 44h.', 'erro'); return; }
+      dados.limite_semanal = String(lim);
       try {
         S.config = await API.put('/api/config', dados);
         document.getElementById('empresa-nome').textContent = S.config.empresa || 'Gestão de jornada';
@@ -441,7 +455,7 @@ const Telas = (() => {
       ${cabecalho('Feriados', 'Dias marcados na escala. Trabalho em feriado gera alerta (pagamento em dobro ou folga compensatória).')}
       <div class="card" style="margin-bottom:18px"><div class="card-corpo">
         <form class="row wrap" data-form style="align-items:flex-end;gap:12px">
-          <label class="campo"><span>Data</span><input class="inp" type="date" name="data" required style="width:170px"></label>
+          <label class="campo" style="width:170px"><span>Data</span>${UI.campoData('', 'name="data" required')}</label>
           <label class="campo" style="flex:1;min-width:220px"><span>Nome</span><input class="inp" name="nome" required placeholder="Ex.: Aniversário da cidade"></label>
           <label class="campo"><span>Abrangência</span><select class="inp" name="abrangencia" style="width:200px">
             <option>Nacional</option><option>Estadual (AM)</option><option>Municipal (Manaus)</option><option>Ponto facultativo</option></select></label>
@@ -455,8 +469,11 @@ const Telas = (() => {
         </tbody></table></div></div>`).join('') : `<div class="card"><div class="vazio">Nenhum feriado cadastrado.</div></div>`}`;
     main.querySelector('[data-form]').addEventListener('submit', async (e) => {
       e.preventDefault();
+      const dados = Object.fromEntries(new FormData(e.target).entries());
+      dados.data = U.lerData(dados.data);
+      if (!dados.data) { UI.toast('Data inválida. Use dd/mm/aaaa.', 'erro'); return; }
       try {
-        await API.post('/api/feriados', Object.fromEntries(new FormData(e.target).entries()));
+        await API.post('/api/feriados', dados);
         await S.carregar();
         UI.toast('Feriado adicionado.');
         feriados(main);

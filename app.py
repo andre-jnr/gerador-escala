@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS funcionarios (
     sexo TEXT DEFAULT 'F',
     admissao TEXT,
     jornada_semanal REAL DEFAULT 44,
+    compensacao INTEGER DEFAULT 0,
     ativo INTEGER DEFAULT 1,
     observacoes TEXT,
     criado_em TEXT DEFAULT (datetime('now','localtime'))
@@ -183,12 +184,53 @@ def backup_diario():
         os.remove(os.path.join(pasta, nome))
 
 
+def backup_antes_de_migrar(motivo):
+    """Cópia extra do banco antes de mudar a estrutura (regra das orientações)."""
+    if not os.path.exists(DB_PATH):
+        return
+    pasta = os.path.join(os.path.dirname(DB_PATH), "backups")
+    os.makedirs(pasta, exist_ok=True)
+    destino = os.path.join(pasta, f"antes-{motivo}-{datetime.now():%Y%m%d-%H%M%S}.db")
+    origem, copia = sqlite3.connect(DB_PATH), sqlite3.connect(destino)
+    origem.backup(copia)
+    copia.close()
+    origem.close()
+
+
+# Turnos do horário comercial do Parque Dez (administrativo 5x2).
+# Entram uma única vez em bancos já existentes; depois podem ser editados pela tela.
+TURNOS_PARQUE_DEZ = [
+    ("Parque Dez · Seg a qui", "P10", "#0369a1", [["07:30", "12:00"], ["13:00", "17:00"]],
+     "Horário comercial Parque Dez: 07h30 às 17h com 1h de intervalo (12h–13h)."),
+    ("Parque Dez · Sexta", "P10S", "#0e7490", [["07:30", "12:00"], ["13:00", "16:30"]],
+     "Horário comercial Parque Dez às sextas: 07h30 às 16h30 com 1h de intervalo (12h–13h)."),
+]
+
+
+def migrar(con):
+    colunas = {r["name"] for r in con.execute("PRAGMA table_info(funcionarios)")}
+    if "compensacao" not in colunas:
+        backup_antes_de_migrar("compensacao")
+        con.execute("ALTER TABLE funcionarios ADD COLUMN compensacao INTEGER DEFAULT 0")
+    feito = con.execute("SELECT valor FROM config WHERE chave='turnos_parque_dez'").fetchone()
+    if feito is None:
+        for nome, sigla, cor, blocos, desc in TURNOS_PARQUE_DEZ:
+            if con.execute("SELECT 1 FROM turnos WHERE nome=?", (nome,)).fetchone() is None:
+                cur = con.execute(
+                    "INSERT INTO turnos (nome, sigla, cor, blocos, descricao) VALUES (?,?,?,?,?)",
+                    (nome, sigla, cor, json.dumps(blocos), desc))
+                con.execute("INSERT INTO log (acao, entidade, entidade_id, detalhe) VALUES (?,?,?,?)",
+                            ("Cadastro", "turno", cur.lastrowid, nome))
+        con.execute("INSERT INTO config (chave, valor) VALUES ('turnos_parque_dez', '1')")
+
+
 def iniciar_banco():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     novo = not os.path.exists(DB_PATH)
     backup_diario()
     con = conectar()
     con.executescript(SCHEMA)
+    migrar(con)
     for chave, valor in CONFIG_PADRAO.items():
         con.execute("INSERT OR IGNORE INTO config (chave, valor) VALUES (?,?)", (chave, valor))
     con.commit()
@@ -306,7 +348,7 @@ def bootstrap():
 
 # --- funcionários
 
-CAMPOS_FUNC = ["nome", "matricula", "cargo", "loja", "sexo", "admissao", "jornada_semanal", "ativo", "observacoes"]
+CAMPOS_FUNC = ["nome", "matricula", "cargo", "loja", "sexo", "admissao", "jornada_semanal", "compensacao", "ativo", "observacoes"]
 
 
 @app.post("/api/funcionarios")
