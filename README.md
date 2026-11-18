@@ -54,6 +54,7 @@ Para remover: `servidor\desinstalar.bat` (não apaga dados).
 - **Datas e horários** podem ser digitados só com números: `01012027` vira 01/01/2027 e `0730` vira 07:30 (também aceita `1/1/27` e `7h30`). O ícone de calendário abre o seletor do navegador.
 - **Vários dias de uma vez** no editor: arraste sobre a grade, ou use Shift+clique (intervalo) e Ctrl+clique (um a um), e clique em **Definir**. Delete limpa os dias selecionados.
 - **Gerar automaticamente** pede um turno para cada dia da semana. “Folga” num dia deixa esse dia livre toda semana (ex.: sábado e domingo no administrativo 5x2). Só quem tem turno nos 7 dias recebe folga rotativa.
+- **PDF**: no editor, botão **PDF**. Abre uma prévia em A4 paisagem (uma tabela por semana, legenda, totais, resumo da CLT e assinaturas); clique em **Baixar PDF** e escolha "Salvar como PDF". As opções escolhidas ficam lembradas no navegador.
 - Turnos com o nome da loja (ex.: “Parque Dez · Sexta”) são sugeridos automaticamente para os funcionários dessa loja.
 
 ## Regras verificadas

@@ -367,6 +367,15 @@ kbd { font-family: inherit; font-size: 11px; border: 1px solid var(--line); bord
 .grade thead th.feriado .fer { font-size: 10.5px; color: var(--erro); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 112px; }
 .grade thead th.hoje-col { box-shadow: inset 0 -2px 0 var(--brand); }
 .grade thead th.semana-ini, .grade td.semana-ini { border-left: 2px solid #dfe3eb; }
+/* Faixa das semanas (linha de cima do cabeçalho); a linha dos dias gruda logo abaixo dela */
+.grade thead tr.linha-semanas th { height: 34px; padding: 0 10px; }
+.grade thead tr.linha-dias th { top: 34px; }
+.grade thead th.semana-cab { background: var(--brand-50); text-align: left; white-space: nowrap; border-bottom: 1px solid var(--brand-100); }
+.grade thead th.semana-cab.par { background: #f4f6fd; }
+.grade thead th.semana-cab .sem-num { font-weight: 600; color: var(--brand-600); font-size: 13px; }
+.grade thead th.semana-cab .sem-datas { color: var(--muted); font-size: 12px; margin-left: 8px; font-variant-numeric: tabular-nums; }
+.grade thead th.semana-cab .sem-atual { margin-left: 8px; font-size: 11px; font-weight: 600; color: #fff; background: var(--brand); border-radius: 99px; padding: 1px 7px; }
+.grade thead th.semana-cab.semana-ini { border-left: 2px solid var(--brand-100); }
 .grade .col-func {
   position: sticky; left: 0; z-index: 2; background: #fff; min-width: 210px; max-width: 230px;
   text-align: left; padding: 10px 12px;

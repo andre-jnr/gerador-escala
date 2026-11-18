@@ -487,7 +487,7 @@ const Escalas = (() => {
       </div>
       <div class="acoes" style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn" data-versoes title="Versões salvas">${ic('historico')} Versões</button>
-        <button class="btn icone" data-imprimir title="Imprimir">${ic('imprimir')}</button>
+        <button class="btn" data-pdf title="Gerar PDF para baixar ou imprimir">${ic('imprimir')} PDF</button>
         <button class="btn icone" data-csv title="Exportar para Excel (CSV)">${ic('baixar')}</button>
         <button class="btn icone" data-duplicar title="Duplicar para outro período">${ic('copiar')}</button>
         ${b ? `<button class="btn" data-reabrir>${ic('destrancar')} Reabrir para edição</button>`
@@ -506,7 +506,9 @@ const Escalas = (() => {
     t.querySelector('[data-excluir]')?.addEventListener('click', excluir);
     t.querySelector('[data-detalhes]')?.addEventListener('click', detalhes);
     t.querySelector('[data-versoes]').addEventListener('click', versoes);
-    t.querySelector('[data-imprimir]').addEventListener('click', () => window.print());
+    t.querySelector('[data-pdf]').addEventListener('click', () => PDF.abrir(() => ({
+      escala: E.escala, funcionarios: funcsObj(), itens: E.itens, analise: E.analise, sujo: E.sujo,
+    })));
     t.querySelector('[data-csv]').addEventListener('click', exportarCSV);
     t.querySelector('[data-duplicar]').addEventListener('click', duplicar);
   }
@@ -539,10 +541,19 @@ const Escalas = (() => {
     const fer = S.feriadosMapa();
     const funcs = funcsObj();
     const pior = (lista) => (lista || []).reduce((p, i) => (p == null || ['erro', 'alerta', 'info'].indexOf(i.sev) < ['erro', 'alerta', 'info'].indexOf(p) ? i.sev : p), null);
-    const head = `<thead><tr><th class="col-func">Funcionário</th>${ds.map((d, i) => {
+    // Linha de cima: uma faixa por semana (seg a dom), com o número e as datas dela
+    const semanas = PDF.semanasDoPeriodo(ds);
+    const temHoje = (s) => S.hoje >= s.ini && S.hoje <= s.fim;
+    const linhaSemanas = semanas.map((s, i) => {
+      const n = ds.filter((d) => U.segunda(d) === s.seg).length;
+      return `<th colspan="${n}" class="semana-cab ${i > 0 ? 'semana-ini' : ''} ${i % 2 ? 'par' : ''}">
+        <span class="sem-num">${s.n}ª semana</span><span class="sem-datas">${U.ddmm(s.ini)} a ${U.ddmm(s.fim)}${n < 7 ? ' · incompleta' : ''}</span>${temHoje(s) ? '<span class="sem-atual">atual</span>' : ''}</th>`;
+    }).join('');
+    const head = `<thead><tr class="linha-semanas"><th class="col-func" rowspan="2">Funcionário</th>${linhaSemanas}<th class="col-tot" rowspan="2">Horas</th></tr>
+      <tr class="linha-dias">${ds.map((d, i) => {
       const cls = [U.dow(d) === 0 && 'domingo', fer[d] && 'feriado', d === S.hoje && 'hoje-col', i > 0 && U.dow(d) === 1 && 'semana-ini'].filter(Boolean).join(' ');
       return `<th class="${cls}" title="${esc(fer[d] || '')}"><div class="dia">${U.DOW[U.dow(d)]}</div><div class="data">${U.ddmm(d)}</div>${fer[d] ? `<div class="fer">${esc(fer[d])}</div>` : ''}</th>`;
-    }).join('')}<th class="col-tot">Horas</th></tr></thead>`;
+    }).join('')}</tr></thead>`;
 
     const body = funcs.map((f) => {
       const pf = E.analise.porFunc[f.id];
@@ -553,7 +564,7 @@ const Escalas = (() => {
         const cls = ['cel', U.dow(d) === 0 && 'domingo', i > 0 && U.dow(d) === 1 && 'semana-ini'].filter(Boolean).join(' ');
         return `<td class="${cls}" data-f="${f.id}" data-d="${d}">${UI.celula(it)}${marc ? `<span class="marcador ${marc}"></span>` : ''}</td>`;
       }).join('');
-      const sem = pf.semanas.map((s, i) => `<div class="tot-semana">S${i + 1} <b class="${s.min > contrato ? 'acima' : ''}">${U.dur(s.min)}</b>${s.completa ? '' : '<span title="Semana incompleta">*</span>'}</div>`).join('');
+      const sem = pf.semanas.map((s, i) => `<div class="tot-semana">${i + 1}ª sem. <b class="${s.min > contrato ? 'acima' : ''}">${U.dur(s.min)}</b>${s.completa ? '' : '<span title="Semana incompleta">*</span>'}</div>`).join('');
       return `<tr><td class="col-func"><div class="func-cel"><div class="avatar">${U.iniciais(f.nome)}</div>
           <div style="min-width:0"><div class="pessoa-nome" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(f.nome)}</div><div class="pessoa-sub">${esc(f.cargo || '')}</div></div>
           ${bloqueada() ? '' : `<button class="btn fantasma pequeno icone acao-linha" data-linha="${f.id}" title="Ações da linha">${ic('linha')}</button>`}</div></td>
@@ -990,7 +1001,7 @@ const Escalas = (() => {
     const funcs = funcsObj();
     const ds = dias();
     const semanas = [...new Set(ds.map(U.segunda))];
-    return `<table class="tabela"><thead><tr><th>Funcionário</th>${semanas.map((s, i) => `<th>S${i + 1} · ${U.ddmm(s)}</th>`).join('')}<th>Dias trab.</th><th>Folgas</th><th>Domingos trab.</th><th class="right">Total</th></tr></thead><tbody>
+    return `<table class="tabela"><thead><tr><th>Funcionário</th>${semanas.map((s, i) => `<th>${i + 1}ª semana · ${U.ddmm(s)}</th>`).join('')}<th>Dias trab.</th><th>Folgas</th><th>Domingos trab.</th><th class="right">Total</th></tr></thead><tbody>
       ${funcs.map((f) => {
         const pf = E.analise.porFunc[f.id];
         const contrato = Number(f.jornada_semanal || 44) * 60;
