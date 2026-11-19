@@ -47,13 +47,14 @@ const UI = (() => {
     });
   };
 
-  function toast(msg, tipo = 'ok') {
+  /** Aviso no canto da tela. tipo: ok | erro | alerta. Não captura cliques (não tampa botões). */
+  function toast(msg, tipo = 'ok', duracao = 3200) {
     const el = document.createElement('div');
     el.className = `toast ${tipo}`;
-    el.innerHTML = `${ic(tipo === 'erro' ? 'erro' : 'check')}<span>${U.esc(msg)}</span>`;
+    el.innerHTML = `${ic(tipo === 'erro' ? 'erro' : tipo === 'alerta' ? 'alerta' : 'check')}<span>${U.esc(msg)}</span>`;
     document.getElementById('toasts').appendChild(el);
-    setTimeout(() => { el.style.transition = 'opacity .3s'; el.style.opacity = '0'; }, 3200);
-    setTimeout(() => el.remove(), 3600);
+    setTimeout(() => { el.style.transition = 'opacity .3s'; el.style.opacity = '0'; }, duracao);
+    setTimeout(() => el.remove(), duracao + 400);
   }
 
   const pilha = [];

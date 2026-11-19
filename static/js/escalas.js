@@ -203,8 +203,10 @@ const Escalas = (() => {
           </div>
           ${algumDomingo || rotativos.length ? `<div class="form-grade">
             ${algumDomingo ? `<div class="campo"><span>Domingo de folga (para quem trabalha domingo)</span><div class="segmentado" data-freq>
-              ${[['auto', 'Automático'], ['2', 'A cada 2 sem.'], ['3', 'A cada 3 sem.']].map(([k, n]) => `<button type="button" data-k="${k}" class="${st.freq === k ? 'ativo' : ''}">${n}</button>`).join('')}</div>
-              <small>Automático: mulheres a cada 2 semanas (CLT art. 386) e homens a cada 3 (Lei 10.101/2000).</small></div>` : ''}
+              ${[['auto', 'Automático'], ['2', 'A cada 2 sem.'], ['3', 'A cada 3 sem.'], ['manual', 'Eu escolho']].map(([k, n]) => `<button type="button" data-k="${k}" class="${st.freq === k ? 'ativo' : ''}">${n}</button>`).join('')}</div>
+              <small>${st.freq === 'manual'
+                ? 'O gerador não marca domingos de folga: todos ficam como trabalho e você define as folgas no editor. O sistema avisa quando a escala não cumprir a regra dos domingos.'
+                : 'Automático: mulheres a cada 2 semanas (CLT art. 386) e homens a cada 3 (Lei 10.101/2000). Depois de gerar, dá para mudar qualquer domingo no editor.'}</small></div>` : ''}
             ${rotativos.length ? `<div class="campo"><span>Folga rotativa pode cair em</span><div class="row wrap" data-dias>
               ${['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((n, i) => `<label class="chk"><input type="checkbox" value="${i}" ${st.diasFolga.includes(i) ? 'checked' : ''}>${n}</label>`).join('')}</div>
               <small>Vale só para ${rotativos.map((mb) => esc(mb.f.nome)).join(', ')}, que ${rotativos.length === 1 ? 'tem' : 'têm'} turno nos 7 dias. O sistema espalha as folgas para não faltar gente.</small></div>` : ''}
@@ -464,10 +466,26 @@ const Escalas = (() => {
 
   function desenharTudo() { desenharTopo(); desenharResumo(); desenharGrade(); desenharAbas(); }
 
+  // Identifica uma ocorrência sem o texto (que muda com os números) para comparar antes/depois
+  const assinatura = (i) => `${i.sev}|${i.regra}|${i.fid}|${i.data}`;
+
   function alterou() {
+    const antes = new Set((E.analise ? E.analise.issues : []).filter((i) => i.sev !== 'info').map(assinatura));
     E.sujo = true;
     analisar();
     desenharTopo(); desenharResumo(); desenharGrade(); desenharAbas();
+    // A alteração sempre vale; se criou violação ou alerta novo, avisa quem está editando
+    const novos = E.analise.issues.filter((i) => i.sev !== 'info' && !antes.has(assinatura(i)));
+    if (novos.length) avisarNovos(novos);
+  }
+
+  function avisarNovos(novos) {
+    const ordem = [...novos].sort((a, b) => (a.sev === 'erro' ? 0 : 1) - (b.sev === 'erro' ? 0 : 1));
+    const i = ordem[0];
+    const quem = i.fid ? `${S.func(i.fid)?.nome || ''}${i.data ? ` · ${U.DOW[U.dow(i.data)]} ${U.ddmm(i.data)}` : ''}: ` : '';
+    const erros = novos.filter((x) => x.sev === 'erro').length;
+    const resto = novos.length > 1 ? ` E mais ${novos.length - 1} ${novos.length - 1 === 1 ? 'aviso' : 'avisos'} na aba Conformidade CLT.` : '';
+    UI.toast(`Alteração feita, mas atenção${erros ? ' (violação da CLT)' : ''}. ${quem}${i.msg}${resto}`, 'alerta', 9000);
   }
 
   // ---------------------------------------------------------------- topo
@@ -635,8 +653,20 @@ const Escalas = (() => {
     const td = ev.target.closest('td.cel');
     if (!td || ev.button !== 0) return;
     if (bloqueada()) {
-      const oc = E.analise.celulas[chaveTd(td)];
-      if (oc) UI.toast(oc.map((o) => o.msg).join(' '), oc.some((o) => o.sev === 'erro') ? 'erro' : 'ok');
+      // Escala publicada fica travada; oferece reabrir na hora em vez de só mostrar os avisos do dia
+      ev.preventDefault();
+      const k = chaveTd(td);
+      const oc = E.analise.celulas[k] || [];
+      UI.confirmar({
+        titulo: 'Escala publicada',
+        texto: `Esta escala está publicada e travada para edição. Para mudar este dia, reabra a escala: ela volta a ser rascunho e a versão publicada fica guardada no histórico.
+          ${oc.length ? `<br><br><span class="muted small">Avisos deste dia: ${oc.map((o) => esc(o.msg)).join(' ')}</span>` : ''}`,
+        ok: 'Reabrir e editar',
+      }).then(async (ok) => {
+        if (!ok || !(await reabrir(true))) return;
+        const novo = tdDaChave(k);
+        if (novo) { E.sel = new Set([k]); E.ancora = k; marcarSelecao(); editarDias(novo, [k]); }
+      });
       return;
     }
     ev.preventDefault();
@@ -1084,14 +1114,16 @@ const Escalas = (() => {
     } catch (e) { UI.toast(e.message, 'erro'); }
   }
 
-  async function reabrir() {
-    if (!(await UI.confirmar({ titulo: 'Reabrir para edição?', texto: 'A escala volta a ser rascunho. A versão publicada continua guardada no histórico de versões.', ok: 'Reabrir' }))) return;
+  /** Volta a escala para rascunho. jaConfirmado === true pula a pergunta (já feita em outro lugar). */
+  async function reabrir(jaConfirmado) {
+    if (jaConfirmado !== true && !(await UI.confirmar({ titulo: 'Reabrir para edição?', texto: 'A escala volta a ser rascunho. A versão publicada continua guardada no histórico de versões.', ok: 'Reabrir' }))) return false;
     try {
       await API.post(`/api/escalas/${E.id}/status`, { status: 'rascunho' });
       E.escala.status = 'rascunho';
-      UI.toast('Escala reaberta.');
+      UI.toast('Escala reaberta. Depois de ajustar, publique de novo.');
       desenharTudo();
-    } catch (e) { UI.toast(e.message, 'erro'); }
+      return true;
+    } catch (e) { UI.toast(e.message, 'erro'); return false; }
   }
 
   async function excluir() {

@@ -304,7 +304,7 @@ const CLT = (() => {
       const f = m.f;
       const p = perfilMembro(m);
       const ctx = contexto[f.id] || contexto[String(f.id)] || {};
-      const k = freq === 'auto' ? (f.sexo === 'F' && ligado(config, 'art386_mulheres') ? 2 : 3) : Number(freq);
+      const k = freq === 'auto' ? (f.sexo === 'F' && ligado(config, 'art386_mulheres') ? 2 : 3) : Number(freq) || 3;
 
       // Domingos trabalhados em sequência antes do início (para não estourar a regra)
       let seqDom = 0;
@@ -321,7 +321,8 @@ const CLT = (() => {
       itens[f.id] = {};
       for (let w = 0; w < semanas; w++) {
         const base = w * 7;
-        const domFolga = p.trabalhaDomingo && w >= primeiraFolgaDom && (w - primeiraFolgaDom) % k === 0;
+        // freq 'manual': o gerador não escolhe domingos de folga; quem edita define depois
+        const domFolga = freq !== 'manual' && p.trabalhaDomingo && w >= primeiraFolgaDom && (w - primeiraFolgaDom) % k === 0;
         const cont = (folgasNaSemana[w] ||= [0, 0, 0, 0, 0, 0, 0]);
 
         let folga = null;
